@@ -1,4 +1,17 @@
 import SwiftUI
+import UIKit
+
+private enum Theme {
+    static let bg = Color(red: 0.04, green: 0.04, blue: 0.05)
+    static let surface = Color(red: 0.10, green: 0.10, blue: 0.12)
+    static let surfaceElevated = Color(red: 0.14, green: 0.14, blue: 0.17)
+    static let border = Color.white.opacity(0.07)
+    static let accent = Color(red: 1.0, green: 0.33, blue: 0.0)
+}
+
+private func haptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
+    UIImpactFeedbackGenerator(style: style).impactOccurred()
+}
 
 struct ContentView: View {
     @EnvironmentObject var p: PlayerEngine
@@ -19,7 +32,7 @@ struct ContentView: View {
         ZStack(alignment: .bottom) {
             TabView(selection: $tab) {
                 homeTab
-                    .tabItem { Label("Главная", systemImage: "flame.fill") }
+                    .tabItem { Label("Главная", systemImage: "house.fill") }
                     .tag(0)
 
                 searchTab
@@ -27,23 +40,36 @@ struct ContentView: View {
                     .tag(1)
 
                 likesTab
-                    .tabItem { Label("Лайки", systemImage: "heart.fill") }
+                    .tabItem { Label("Медиатека", systemImage: "heart.fill") }
                     .tag(2)
 
                 accountTab
-                    .tabItem { Label("Профиль", systemImage: "person.crop.circle.fill") }
+                    .tabItem { Label("Профиль", systemImage: "person.fill") }
                     .tag(3)
             }
+            .tint(.white)
 
             if p.current != nil {
-                MiniPlayer { showNow = true }
-                    .padding(.bottom, 54)
+                MiniPlayer {
+                    haptic(.light)
+                    showNow = true
+                }
+                .padding(.bottom, 54)
             }
-            HiddenWebView(webView: p.webView).frame(width: 1, height: 1).opacity(0.01)
+            HiddenWebView(webView: p.webView)
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
         }
-        .alert("Вставить ссылку SoundCloud", isPresented: $showAdd) {
+        .preferredColorScheme(.dark)
+        .alert("Открыть по ссылке", isPresented: $showAdd) {
             TextField("https://soundcloud.com/...", text: $link)
-            Button("Открыть") { let l = link; Task { await p.add(link: l) } }
+            Button("Открыть") {
+                let l = link
+                Task {
+                    await p.add(link: l)
+                    if p.current != nil { showNow = true }
+                }
+            }
             Button("Отмена", role: .cancel) {}
         }
         .alert("Ошибка", isPresented: .constant(p.errorText != nil)) {
@@ -58,7 +84,7 @@ struct ContentView: View {
                     }
                 }
                 .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("Вход в SoundCloud")
+                .navigationTitle("SoundCloud")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -82,52 +108,44 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $showNow) { NowPlayingView() }
     }
 
-    // MARK: - 1. HOME TAB (SoundCloud Discovery & Recommendations)
+    // MARK: - 1. HOME TAB
     private var homeTab: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    colors: [Color(red: 0.12, green: 0.05, blue: 0.02), .black, .black],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ).ignoresSafeArea()
+                Theme.bg.ignoresSafeArea()
 
                 ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 24) {
-                        // My Wave Hero Banner
+                    VStack(alignment: .leading, spacing: 26) {
                         myWaveBanner
 
-                        // Genre Chips
+                        // Genre Pills
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
+                            HStack(spacing: 8) {
                                 ForEach(p.genres, id: \.self) { g in
+                                    let active = p.selectedGenre == g
                                     Button {
+                                        haptic(.light)
                                         Task { await p.loadHome(genre: g) }
                                     } label: {
                                         Text(g)
-                                            .font(.subheadline.weight(.semibold))
-                                            .padding(.horizontal, 16)
-                                            .padding(.vertical, 8)
+                                            .font(.subheadline.weight(active ? .semibold : .regular))
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 7)
                                             .background(
-                                                p.selectedGenre == g
-                                                    ? AnyShapeStyle(LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing))
-                                                    : AnyShapeStyle(Color.white.opacity(0.08)),
+                                                active ? Color.white : Theme.surface,
                                                 in: Capsule()
                                             )
-                                            .foregroundStyle(.white)
+                                            .foregroundStyle(active ? .black : .white.opacity(0.85))
                                     }
+                                    .buttonStyle(.plain)
                                 }
                             }
-                            .padding(.horizontal)
+                            .padding(.horizontal, 16)
                         }
 
-                        // Personalized "For You" Carousel
                         if !p.forYouTracks.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
-                                SectionHeader(
-                                    title: p.currentUser != nil ? "Для тебя, \(p.currentUser!.username)" : "Рекомендации для тебя",
-                                    subtitle: "Подобрано на основе твоих лайков и вайба"
-                                ) {
+                                SectionHeader(title: "Для тебя") {
                                     p.playQueue(p.forYouTracks, startIndex: 0)
                                     showNow = true
                                 }
@@ -139,26 +157,25 @@ struct ContentView: View {
                                                 p.playQueue(p.forYouTracks, startIndex: idx)
                                                 showNow = true
                                             } label: {
-                                                FeaturedTrackCard(track: t, isPlaying: p.current?.url == t.url && p.isPlaying)
+                                                FeaturedTrackCard(track: t, isCurrent: p.current?.url == t.url)
                                             }
                                             .buttonStyle(.plain)
                                         }
                                     }
-                                    .padding(.horizontal)
+                                    .padding(.horizontal, 16)
                                 }
                             }
                         }
 
-                        // Recently Played
                         if !p.recentTracks.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
-                                SectionHeader(title: "Недавно слушал", subtitle: "Продолжи с того же места") {
+                                SectionHeader(title: "Недавние") {
                                     p.playQueue(p.recentTracks, startIndex: 0)
                                     showNow = true
                                 }
 
                                 ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 12) {
+                                    HStack(spacing: 10) {
                                         ForEach(Array(p.recentTracks.prefix(12).enumerated()), id: \.element.id) { idx, t in
                                             Button {
                                                 p.playQueue(p.recentTracks, startIndex: idx)
@@ -169,17 +186,16 @@ struct ContentView: View {
                                             .buttonStyle(.plain)
                                         }
                                     }
-                                    .padding(.horizontal)
+                                    .padding(.horizontal, 16)
                                 }
                             }
                         }
 
-                        // Featured Mixes & Playlists
                         if !p.featuredPlaylists.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("Плейлисты и миксы • \(p.selectedGenre)")
-                                    .font(.title3.bold())
-                                    .padding(.horizontal)
+                                Text("Плейлисты")
+                                    .font(.headline)
+                                    .padding(.horizontal, 16)
 
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 14) {
@@ -192,15 +208,14 @@ struct ContentView: View {
                                             .buttonStyle(.plain)
                                         }
                                     }
-                                    .padding(.horizontal)
+                                    .padding(.horizontal, 16)
                                 }
                             }
                         }
 
-                        // More Like Your Likes
                         if !p.relatedToRecentTracks.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
-                                SectionHeader(title: "Похожее на твои треки", subtitle: "Свежие находки SoundCloud") {
+                                SectionHeader(title: "Похожее") {
                                     p.playQueue(p.relatedToRecentTracks, startIndex: 0)
                                     showNow = true
                                 }
@@ -212,28 +227,31 @@ struct ContentView: View {
                                                 p.playQueue(p.relatedToRecentTracks, startIndex: idx)
                                                 showNow = true
                                             } label: {
-                                                FeaturedTrackCard(track: t, isPlaying: p.current?.url == t.url && p.isPlaying)
+                                                FeaturedTrackCard(track: t, isCurrent: p.current?.url == t.url)
                                             }
                                             .buttonStyle(.plain)
                                         }
                                     }
-                                    .padding(.horizontal)
+                                    .padding(.horizontal, 16)
                                 }
                             }
                         }
 
-                        // Trending Tracks List
-                        VStack(alignment: .leading, spacing: 10) {
-                            SectionHeader(title: "В тренде • \(p.selectedGenre)", subtitle: "Полные версии популярных треков") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            SectionHeader(title: p.selectedGenre) {
                                 p.playQueue(p.trendingTracks, startIndex: 0)
                                 showNow = true
                             }
 
                             if p.isLoadingHome && p.trendingTracks.isEmpty {
-                                HStack { Spacer(); ProgressView("Загружаем тренды..."); Spacer() }
-                                    .padding(.vertical, 30)
+                                HStack {
+                                    Spacer()
+                                    ProgressView().tint(.secondary)
+                                    Spacer()
+                                }
+                                .padding(.vertical, 32)
                             } else {
-                                LazyVStack(spacing: 6) {
+                                LazyVStack(spacing: 2) {
                                     ForEach(Array(p.trendingTracks.prefix(25).enumerated()), id: \.element.id) { idx, t in
                                         TrackRow(
                                             track: t,
@@ -243,7 +261,10 @@ struct ContentView: View {
                                                 p.playQueue(p.trendingTracks, startIndex: idx)
                                                 showNow = true
                                             },
-                                            onLike: { p.toggleLike(t) },
+                                            onLike: {
+                                                haptic(.light)
+                                                p.toggleLike(t)
+                                            },
                                             onRadio: {
                                                 Task {
                                                     await p.startTrackRadio(t)
@@ -251,7 +272,7 @@ struct ContentView: View {
                                                 }
                                             }
                                         )
-                                        .padding(.horizontal)
+                                        .padding(.horizontal, 16)
                                     }
                                 }
                             }
@@ -268,20 +289,13 @@ struct ContentView: View {
             .navigationTitle("Puzo")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
-                        if p.speed != .normal {
-                            Text(p.speed.shortLabel)
-                                .font(.caption2.bold())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.orange, in: Capsule())
-                        }
-                        Button {
-                            link = UIPasteboard.general.string ?? ""
-                            showAdd = true
-                        } label: {
-                            Image(systemName: "link.badge.plus")
-                        }
+                    Button {
+                        link = UIPasteboard.general.string ?? ""
+                        showAdd = true
+                    } label: {
+                        Image(systemName: "link")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.85))
                     }
                 }
             }
@@ -290,75 +304,85 @@ struct ContentView: View {
 
     private var myWaveBanner: some View {
         Button {
+            haptic(.medium)
             p.startMyWave()
             showNow = true
         } label: {
-            ZStack(alignment: .bottomLeading) {
+            ZStack {
+                if let art = p.forYouTracks.first?.artwork ?? p.trendingTracks.first?.artwork {
+                    Cover(url: art)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 136)
+                        .blur(radius: 36)
+                        .opacity(0.45)
+                        .clipped()
+                }
                 LinearGradient(
                     colors: [
-                        Color(red: 1.0, green: 0.35, blue: 0.0),
-                        Color(red: 0.85, green: 0.1, blue: 0.35),
-                        Color(red: 0.25, green: 0.05, blue: 0.45)
+                        Color.white.opacity(0.08),
+                        Color.black.opacity(0.65)
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
-                .frame(height: 155)
-                .clipShape(RoundedRectangle(cornerRadius: 24))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                )
 
-                HStack {
+                HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "waveform")
-                                .font(.title2.bold())
-                            Text("МОЯ ВОЛНА")
-                                .font(.caption.weight(.heavy))
-                                .tracking(1.5)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(.ultraThinMaterial, in: Capsule())
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Theme.accent)
+                                .frame(width: 6, height: 6)
+                            Text("ПОТОК")
+                                .font(.system(size: 11, weight: .semibold))
+                                .tracking(1.2)
+                                .foregroundStyle(.white.opacity(0.7))
                         }
                         Spacer()
-                        Text(p.currentUser != nil ? "Поток для \(p.currentUser!.username)" : "Бесконечный поток")
-                            .font(.title2.bold())
+                        Text("Моя волна")
+                            .font(.title2.weight(.bold))
                             .foregroundStyle(.white)
-                        Text("Твои лайки + похожие бэнгеры без 30-сек превью")
+                        Text(p.currentUser != nil ? "Настроено под \(p.currentUser!.username)" : "Бесконечный микс по твоим вкусам")
                             .font(.caption)
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(.white.opacity(0.6))
                     }
                     Spacer()
                     ZStack {
                         Circle()
                             .fill(.white)
-                            .frame(width: 58, height: 58)
-                            .shadow(color: .black.opacity(0.3), radius: 10)
+                            .frame(width: 48, height: 48)
                         Image(systemName: "play.fill")
-                            .font(.title2)
+                            .font(.subheadline.weight(.bold))
                             .foregroundStyle(.black)
-                            .offset(x: 2)
+                            .offset(x: 1)
                     }
                 }
                 .padding(20)
             }
-            .padding(.horizontal)
+            .frame(height: 136)
+            .background(Theme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - 2. SEARCH TAB (Tracks, Playlists, Artists + Trending Tags)
+    // MARK: - 2. SEARCH TAB
     private var searchTab: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                Theme.bg.ignoresSafeArea()
                 VStack(spacing: 12) {
-                    // Search Bar
-                    HStack(spacing: 10) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.orange)
-                        TextField("Трек, артист, плейлист или ссылка...", text: $query)
+                    // Clean Search Field (auto-searches on typing)
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        TextField("Треки, артисты или ссылка...", text: $query)
+                            .font(.subheadline)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .submitLabel(.search)
@@ -370,74 +394,83 @@ struct ContentView: View {
                                 p.searchPlaylists = []
                                 p.searchUsers = []
                             } label: {
-                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        Button("Найти") {
-                            Task { await p.search(query: query) }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(.horizontal, 16)
+                    .task(id: query) {
+                        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !q.isEmpty else { return }
+                        try? await Task.sleep(nanoseconds: 350_000_000)
+                        guard !Task.isCancelled else { return }
+                        await p.search(query: q)
+                    }
+
+                    if !query.isEmpty || !p.searchResults.isEmpty {
+                        Picker("Тип", selection: $searchScope) {
+                            Text("Треки").tag(0)
+                            Text("Плейлисты").tag(1)
+                            Text("Артисты").tag(2)
                         }
-                        .font(.subheadline.bold())
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Color.orange, in: Capsule())
-                        .foregroundStyle(.black)
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 16)
                     }
-                    .padding(10)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-                    .padding(.horizontal)
 
-                    // Scope Picker
-                    Picker("Тип", selection: $searchScope) {
-                        Text("Треки (\(p.searchResults.count))").tag(0)
-                        Text("Плейлисты (\(p.searchPlaylists.count))").tag(1)
-                        Text("Артисты (\(p.searchUsers.count))").tag(2)
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
-
-                    if p.isSearching {
+                    if p.isSearching && p.searchResults.isEmpty {
                         Spacer()
-                        ProgressView("Ищем в SoundCloud...")
+                        ProgressView().tint(.secondary)
                         Spacer()
                     } else if query.isEmpty && p.searchResults.isEmpty {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 16) {
-                                Text("Быстрый поиск по вайбу")
-                                    .font(.headline)
-                                    .padding(.horizontal)
+                        ScrollView(showsIndicators: false) {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Жанры и настроение")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 16)
 
-                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                                     ForEach(VibePreset.all) { item in
                                         Button {
+                                            haptic(.light)
                                             query = item.title
                                             Task { await p.search(query: item.title) }
                                         } label: {
-                                            HStack(spacing: 10) {
-                                                Image(systemName: item.icon)
-                                                    .foregroundStyle(item.color)
-                                                Text(item.title)
-                                                    .font(.subheadline.bold())
-                                                    .foregroundStyle(.white)
-                                                    .lineLimit(1)
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 3) {
+                                                    Text(item.title)
+                                                        .font(.subheadline.weight(.medium))
+                                                        .foregroundStyle(.white)
+                                                        .lineLimit(1)
+                                                    Text(item.subtitle)
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                        .lineLimit(1)
+                                                }
                                                 Spacer()
                                             }
-                                            .padding(14)
-                                            .background(item.color.opacity(0.16), in: RoundedRectangle(cornerRadius: 14))
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 13)
+                                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                             .overlay(
-                                                RoundedRectangle(cornerRadius: 14)
-                                                    .stroke(item.color.opacity(0.35), lineWidth: 1)
+                                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                    .stroke(Theme.border, lineWidth: 1)
                                             )
                                         }
                                         .buttonStyle(.plain)
                                     }
                                 }
-                                .padding(.horizontal)
+                                .padding(.horizontal, 16)
                             }
-                            .padding(.top, 8)
+                            .padding(.top, 6)
                         }
                     } else {
-                        ScrollView {
-                            LazyVStack(spacing: 8) {
+                        ScrollView(showsIndicators: false) {
+                            LazyVStack(spacing: 2) {
                                 if searchScope == 0 {
                                     ForEach(Array(p.searchResults.enumerated()), id: \.element.id) { idx, t in
                                         TrackRow(
@@ -448,7 +481,10 @@ struct ContentView: View {
                                                 p.playQueue(p.searchResults, startIndex: idx)
                                                 showNow = true
                                             },
-                                            onLike: { p.toggleLike(t) },
+                                            onLike: {
+                                                haptic(.light)
+                                                p.toggleLike(t)
+                                            },
                                             onRadio: {
                                                 Task {
                                                     await p.startTrackRadio(t)
@@ -456,7 +492,7 @@ struct ContentView: View {
                                                 }
                                             }
                                         )
-                                        .padding(.horizontal)
+                                        .padding(.horizontal, 16)
                                     }
                                 } else if searchScope == 1 {
                                     ForEach(p.searchPlaylists) { pl in
@@ -464,17 +500,24 @@ struct ContentView: View {
                                             selectedPlaylist = pl
                                         } label: {
                                             HStack(spacing: 12) {
-                                                Cover(url: pl.artwork).frame(width: 60, height: 60)
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    Text(pl.title).font(.subheadline.bold()).foregroundStyle(.white).lineLimit(1)
-                                                    Text(pl.author).font(.caption).foregroundStyle(.secondary)
-                                                    Text("\(pl.trackCount) треков").font(.caption2).foregroundStyle(.orange)
+                                                Cover(url: pl.artwork, radius: 8)
+                                                    .frame(width: 52, height: 52)
+                                                VStack(alignment: .leading, spacing: 3) {
+                                                    Text(pl.title)
+                                                        .font(.subheadline.weight(.medium))
+                                                        .foregroundStyle(.white)
+                                                        .lineLimit(1)
+                                                    Text("\(pl.author) · \(pl.trackCount) тр.")
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
                                                 }
                                                 Spacer()
-                                                Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                                                Image(systemName: "chevron.right")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.tertiary)
                                             }
-                                            .padding(.horizontal)
-                                            .padding(.vertical, 4)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 6)
                                         }
                                         .buttonStyle(.plain)
                                     }
@@ -484,19 +527,24 @@ struct ContentView: View {
                                             selectedArtist = u
                                         } label: {
                                             HStack(spacing: 12) {
-                                                Cover(url: u.avatarUrl)
-                                                    .frame(width: 56, height: 56)
+                                                Cover(url: u.avatarUrl, radius: 24)
+                                                    .frame(width: 48, height: 48)
                                                     .clipShape(Circle())
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    Text(u.username).font(.subheadline.bold()).foregroundStyle(.white)
-                                                    Text("\(u.followersCount ?? 0) подписчиков • \(u.trackCount ?? 0) треков")
-                                                        .font(.caption).foregroundStyle(.secondary)
+                                                VStack(alignment: .leading, spacing: 3) {
+                                                    Text(u.username)
+                                                        .font(.subheadline.weight(.medium))
+                                                        .foregroundStyle(.white)
+                                                    Text("\(u.followersCount ?? 0) подписчиков")
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
                                                 }
                                                 Spacer()
-                                                Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                                                Image(systemName: "chevron.right")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.tertiary)
                                             }
-                                            .padding(.horizontal)
-                                            .padding(.vertical, 4)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 6)
                                         }
                                         .buttonStyle(.plain)
                                     }
@@ -511,7 +559,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - 3. LIKES & PLAYLISTS TAB (Synced with Account + Local Favorites)
+    // MARK: - 3. LIBRARY / LIKES TAB
     private var combinedLikes: [Track] {
         var result: [Track] = []
         var seen = Set<String>()
@@ -529,83 +577,94 @@ struct ContentView: View {
     private var likesTab: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
-                VStack(spacing: 10) {
+                Theme.bg.ignoresSafeArea()
+                VStack(spacing: 12) {
                     Picker("Раздел", selection: $likesScope) {
-                        Text("Лайки (\(combinedLikes.count))").tag(0)
+                        Text("Треки (\(combinedLikes.count))").tag(0)
                         Text("Плейлисты (\(p.accountPlaylists.count))").tag(1)
                     }
                     .pickerStyle(.segmented)
-                    .padding(.horizontal)
+                    .padding(.horizontal, 16)
 
                     if likesScope == 0 {
                         if combinedLikes.isEmpty && likesFilter.isEmpty {
                             Spacer()
-                            VStack(spacing: 14) {
-                                Image(systemName: "heart.circle.fill")
-                                    .font(.system(size: 56))
-                                    .foregroundStyle(.orange)
-                                Text("Твои лайки появятся здесь")
-                                    .font(.title3.bold())
-                                Text("Войди в аккаунт во вкладке «Профиль», чтобы подтянуть все лайки из SoundCloud, или нажимай сердечко на любых треках.")
+                            VStack(spacing: 12) {
+                                Image(systemName: "heart")
+                                    .font(.system(size: 38, weight: .light))
+                                    .foregroundStyle(.secondary)
+                                Text("Нет сохраненных треков")
+                                    .font(.headline)
+                                Text("Отмечай треки сердечком или подключи профиль SoundCloud.")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 28)
+                                    .padding(.horizontal, 40)
                                 if p.currentUser == nil {
-                                    Button("Перейти к входу в аккаунт") { tab = 3 }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(.orange)
+                                    Button("Подключить профиль") { tab = 3 }
+                                        .font(.subheadline.weight(.semibold))
+                                        .padding(.horizontal, 18)
+                                        .padding(.vertical, 10)
+                                        .background(.white, in: Capsule())
+                                        .foregroundStyle(.black)
+                                        .padding(.top, 4)
                                 }
                             }
                             Spacer()
                         } else {
-                            HStack(spacing: 10) {
-                                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                                TextField("Поиск среди лайков...", text: $likesFilter)
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                TextField("Фильтр по медиатеке", text: $likesFilter)
+                                    .font(.subheadline)
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled()
                                 if !likesFilter.isEmpty {
                                     Button { likesFilter = "" } label: {
-                                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
                             }
-                            .padding(10)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                            .padding(.horizontal)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .padding(.horizontal, 16)
 
-                            HStack(spacing: 12) {
+                            HStack(spacing: 10) {
                                 Button {
+                                    haptic(.light)
                                     p.shuffle = false
                                     p.playQueue(combinedLikes, startIndex: 0)
                                     showNow = true
                                 } label: {
-                                    Label("Слушать все", systemImage: "play.fill")
-                                        .font(.subheadline.bold())
+                                    Label("Слушать", systemImage: "play.fill")
+                                        .font(.subheadline.weight(.semibold))
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 11)
-                                        .background(Color.orange, in: RoundedRectangle(cornerRadius: 12))
+                                        .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         .foregroundStyle(.black)
                                 }
 
                                 Button {
+                                    haptic(.light)
                                     p.shuffle = true
                                     p.playQueue(combinedLikes.shuffled(), startIndex: 0)
                                     showNow = true
                                 } label: {
                                     Label("Перемешать", systemImage: "shuffle")
-                                        .font(.subheadline.bold())
+                                        .font(.subheadline.weight(.medium))
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 11)
-                                        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+                                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         .foregroundStyle(.white)
                                 }
                             }
-                            .padding(.horizontal)
+                            .padding(.horizontal, 16)
 
-                            ScrollView {
-                                LazyVStack(spacing: 6) {
+                            ScrollView(showsIndicators: false) {
+                                LazyVStack(spacing: 2) {
                                     ForEach(Array(combinedLikes.enumerated()), id: \.element.id) { idx, t in
                                         TrackRow(
                                             track: t,
@@ -615,7 +674,10 @@ struct ContentView: View {
                                                 p.playQueue(combinedLikes, startIndex: idx)
                                                 showNow = true
                                             },
-                                            onLike: { p.toggleLike(t) },
+                                            onLike: {
+                                                haptic(.light)
+                                                p.toggleLike(t)
+                                            },
                                             onRadio: {
                                                 Task {
                                                     await p.startTrackRadio(t)
@@ -623,7 +685,7 @@ struct ContentView: View {
                                                 }
                                             }
                                         )
-                                        .padding(.horizontal)
+                                        .padding(.horizontal, 16)
                                     }
                                     Spacer(minLength: 110)
                                 }
@@ -635,34 +697,39 @@ struct ContentView: View {
                     } else {
                         if p.accountPlaylists.isEmpty {
                             Spacer()
-                            Text("Плейлисты аккаунта не найдены.\nВойди в аккаунт или ищи плейлисты во вкладке «Поиск».")
+                            Text("Плейлисты появятся после подключения профиля")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                                 .padding()
                             Spacer()
                         } else {
-                            ScrollView {
-                                LazyVStack(spacing: 10) {
+                            ScrollView(showsIndicators: false) {
+                                LazyVStack(spacing: 8) {
                                     ForEach(p.accountPlaylists) { pl in
                                         Button {
                                             selectedPlaylist = pl
                                         } label: {
                                             HStack(spacing: 12) {
-                                                Cover(url: pl.artwork).frame(width: 64, height: 64)
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    Text(pl.title).font(.headline).foregroundStyle(.white).lineLimit(1)
-                                                    Text(pl.author).font(.caption).foregroundStyle(.secondary)
-                                                    Text("\(pl.trackCount) треков").font(.caption2).foregroundStyle(.orange)
+                                                Cover(url: pl.artwork, radius: 10)
+                                                    .frame(width: 56, height: 56)
+                                                VStack(alignment: .leading, spacing: 3) {
+                                                    Text(pl.title)
+                                                        .font(.subheadline.weight(.medium))
+                                                        .foregroundStyle(.white)
+                                                        .lineLimit(1)
+                                                    Text("\(pl.author) · \(pl.trackCount) тр.")
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
                                                 }
                                                 Spacer()
-                                                Image(systemName: "play.circle.fill")
-                                                    .font(.title2)
-                                                    .foregroundStyle(.orange)
+                                                Image(systemName: "chevron.right")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.tertiary)
                                             }
-                                            .padding(12)
-                                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-                                            .padding(.horizontal)
+                                            .padding(10)
+                                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                            .padding(.horizontal, 16)
                                         }
                                         .buttonStyle(.plain)
                                     }
@@ -673,13 +740,14 @@ struct ContentView: View {
                     }
                 }
             }
-            .navigationTitle("Моя коллекция")
+            .navigationTitle("Медиатека")
             .toolbar {
                 if p.currentUser != nil {
                     Button {
                         Task { await p.fetchAccountData() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
+                            .font(.subheadline)
                     }
                 }
             }
@@ -690,61 +758,61 @@ struct ContentView: View {
     private var accountTab: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
-                ScrollView {
+                Theme.bg.ignoresSafeArea()
+                ScrollView(showsIndicators: false) {
                     if let user = p.currentUser {
-                        VStack(spacing: 18) {
-                            // Profile Header Card
-                            VStack(spacing: 12) {
-                                Cover(url: user.avatarUrl)
-                                    .frame(width: 88, height: 88)
+                        VStack(spacing: 16) {
+                            VStack(spacing: 14) {
+                                Cover(url: user.avatarUrl, radius: 40)
+                                    .frame(width: 80, height: 80)
                                     .clipShape(Circle())
-                                    .overlay(Circle().stroke(Color.orange, lineWidth: 2))
 
-                                Text(user.username)
-                                    .font(.title2.bold())
+                                VStack(spacing: 4) {
+                                    Text(user.username)
+                                        .font(.title3.weight(.bold))
+                                    Text("SoundCloud подключен")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
 
-                                Text(p.oauthToken != nil ? "OAuth-сессия SoundCloud активна" : "Синхронизация по профилю SoundCloud")
-                                    .font(.caption)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 4)
-                                    .background(Color.orange.opacity(0.2), in: Capsule())
-                                    .foregroundStyle(.orange)
-
-                                HStack(spacing: 28) {
-                                    StatView(value: "\(p.accountTracks.count)", label: "Лайков")
-                                    StatView(value: "\(p.accountPlaylists.count)", label: "Плейлистов")
-                                    StatView(value: "\(user.followersCount ?? 0)", label: "Подписчиков")
+                                HStack(spacing: 32) {
+                                    StatView(value: "\(p.accountTracks.count)", label: "Лайки")
+                                    StatView(value: "\(p.accountPlaylists.count)", label: "Плейлисты")
+                                    StatView(value: "\(user.followersCount ?? 0)", label: "Подписчики")
                                 }
                                 .padding(.top, 4)
                             }
-                            .padding(20)
+                            .padding(22)
                             .frame(maxWidth: .infinity)
-                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 20))
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(Theme.border, lineWidth: 1)
+                            )
 
-                            HStack(spacing: 12) {
+                            HStack(spacing: 10) {
                                 Button {
                                     Task {
                                         await p.fetchAccountData()
                                         await p.loadHome(genre: p.selectedGenre)
                                     }
                                 } label: {
-                                    Label("Обновить данные", systemImage: "arrow.triangle.2.circlepath")
-                                        .font(.subheadline.bold())
+                                    Text("Синхронизировать")
+                                        .font(.subheadline.weight(.semibold))
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 12)
-                                        .background(Color.orange, in: RoundedRectangle(cornerRadius: 12))
+                                        .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         .foregroundStyle(.black)
                                 }
 
                                 Button(role: .destructive) {
                                     p.logout()
                                 } label: {
-                                    Label("Выйти", systemImage: "rectangle.portrait.and.arrow.right")
-                                        .font(.subheadline.bold())
-                                        .padding(.horizontal, 18)
+                                    Text("Выйти")
+                                        .font(.subheadline.weight(.medium))
+                                        .padding(.horizontal, 20)
                                         .padding(.vertical, 12)
-                                        .background(Color.red.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
+                                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         .foregroundStyle(.red)
                                 }
                             }
@@ -754,84 +822,91 @@ struct ContentView: View {
                                     showWebLogin = true
                                 } label: {
                                     HStack {
-                                        Image(systemName: "key.fill")
-                                        Text("Войти через браузер для приватных треков")
+                                        Text("Войти с паролем (для закрытых плейлистов)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
                                     }
-                                    .font(.subheadline)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(12)
-                                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                                    .padding(14)
+                                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 }
                             }
                         }
-                        .padding()
+                        .padding(16)
                     } else {
-                        VStack(spacing: 20) {
-                            Image(systemName: "waveform.badge.person.crop")
-                                .font(.system(size: 56))
-                                .foregroundStyle(.orange)
-                                .padding(.top, 20)
-
-                            Text("Подключи свой SoundCloud")
-                                .font(.title2.bold())
-
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Быстрый вход по нику или ссылке")
+                        VStack(alignment: .leading, spacing: 18) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("По нику или ссылке")
                                     .font(.headline)
-                                Text("Просто введи свой ник или ссылку на профиль SoundCloud — мы сразу загрузим твои лайки, плейлисты и настроим персональную «Мою волну».")
+                                Text("Введи свой ник SoundCloud, чтобы загрузить лайки и плейлисты.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
 
-                                HStack {
-                                    TextField("username или soundcloud.com/...", text: $profileInput)
+                                HStack(spacing: 8) {
+                                    TextField("username или ссылка", text: $profileInput)
+                                        .font(.subheadline)
                                         .textInputAutocapitalization(.never)
                                         .autocorrectionDisabled()
-                                        .padding(12)
-                                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 11)
+                                        .background(Theme.bg, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                                    Button("Войти") {
+                                    Button("Готово") {
                                         Task { await p.loginByProfile(input: profileInput) }
                                     }
-                                    .font(.subheadline.bold())
-                                    .padding(.horizontal, 18)
-                                    .padding(.vertical, 12)
-                                    .background(Color.orange, in: RoundedRectangle(cornerRadius: 12))
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 11)
+                                    .background(.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     .foregroundStyle(.black)
                                     .disabled(profileInput.trimmingCharacters(in: .whitespaces).isEmpty || p.isLoadingAccount)
                                 }
                             }
-                            .padding()
-                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+                            .padding(16)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Theme.border, lineWidth: 1)
+                            )
 
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Полный вход через SoundCloud Web")
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Через аккаунт SoundCloud")
                                     .font(.headline)
-                                Text("Авторизуйся в официальном окне SoundCloud — приложение автоматически перехватит OAuth-токен без API ключей.")
+                                Text("Если профиль закрытый или нужен доступ к личным подборкам.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
 
                                 Button {
                                     showWebLogin = true
                                 } label: {
-                                    HStack {
-                                        Image(systemName: "globe")
-                                        Text("Открыть вход SoundCloud")
-                                            .bold()
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 13)
-                                    .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                                    .foregroundStyle(.white)
+                                    Text("Войти через SoundCloud")
+                                        .font(.subheadline.weight(.medium))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                        .foregroundStyle(.white)
                                 }
                             }
-                            .padding()
-                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+                            .padding(16)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Theme.border, lineWidth: 1)
+                            )
 
                             if p.isLoadingAccount {
-                                ProgressView("Синхронизация аккаунта...")
+                                HStack {
+                                    Spacer()
+                                    ProgressView().tint(.secondary)
+                                    Spacer()
+                                }
+                                .padding(.top, 8)
                             }
                         }
-                        .padding()
+                        .padding(16)
                     }
                     Spacer(minLength: 100)
                 }
@@ -841,83 +916,68 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Reusable Cards & Rows
+// MARK: - Reusable Minimalist Components
 
 struct VibePreset: Identifiable {
     var id: String { title }
     let title: String
-    let icon: String
-    let color: Color
+    let subtitle: String
 
     static let all: [VibePreset] = [
-        VibePreset(title: "Brazilian Phonk", icon: "bolt.fill", color: .orange),
-        VibePreset(title: "Slowed + Reverb", icon: "moon.stars.fill", color: .purple),
-        VibePreset(title: "Nightcore / Sped Up", icon: "sparkles", color: .pink),
-        VibePreset(title: "Dark Trap / Opium", icon: "flame.fill", color: .red),
-        VibePreset(title: "Hyperpop / Glitch", icon: "waveform.path.ecg", color: .cyan),
-        VibePreset(title: "Russian Rap", icon: "headphones", color: .blue),
-        VibePreset(title: "Lo-Fi Chill", icon: "cup.and.saucer.fill", color: .mint),
-        VibePreset(title: "Hard Techno / Rave", icon: "speaker.wave.3.fill", color: .yellow)
+        VibePreset(title: "Phonk", subtitle: "Drift · Memphis · Brazilian"),
+        VibePreset(title: "Slowed + Reverb", subtitle: "Atmospheric · Late night"),
+        VibePreset(title: "Nightcore", subtitle: "Sped up · High energy"),
+        VibePreset(title: "Opium / Dark Trap", subtitle: "Rage · Synth · Underground"),
+        VibePreset(title: "Hyperpop", subtitle: "Glitch · Digicore"),
+        VibePreset(title: "Russian Rap", subtitle: "Хип-хоп · Андерграунд"),
+        VibePreset(title: "Lo-Fi Beats", subtitle: "Chill · Study · Instrumental"),
+        VibePreset(title: "Hard Techno", subtitle: "Industrial · Rave · 150 BPM")
     ]
 }
 
 struct SectionHeader: View {
     let title: String
-    let subtitle: String
     var onPlayAll: () -> Void
 
     var body: some View {
-        HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.title3.bold()).foregroundStyle(.white)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
-            }
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.white)
             Spacer()
             Button(action: onPlayAll) {
-                HStack(spacing: 4) {
-                    Image(systemName: "play.fill")
-                    Text("Все")
-                }
-                .font(.caption.bold())
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.2), in: Capsule())
-                .foregroundStyle(.orange)
+                Text("Слушать все")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 16)
     }
 }
 
 struct FeaturedTrackCard: View {
     let track: Track
-    let isPlaying: Bool
+    let isCurrent: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .bottomTrailing) {
-                Cover(url: track.artwork)
-                    .frame(width: 150, height: 150)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+        VStack(alignment: .leading, spacing: 7) {
+            Cover(url: track.artwork, radius: 12)
+                .frame(width: 140, height: 140)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(isCurrent ? Theme.accent : Theme.border, lineWidth: isCurrent ? 1.5 : 0.5)
+                )
 
-                ZStack {
-                    Circle().fill(Color.orange).frame(width: 34, height: 34)
-                    Image(systemName: isPlaying ? "waveform" : "play.fill")
-                        .font(.caption.bold())
-                        .foregroundStyle(.black)
-                }
-                .padding(8)
-            }
             Text(track.title)
-                .font(.subheadline.bold())
-                .foregroundStyle(.white)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(isCurrent ? Theme.accent : .white)
                 .lineLimit(1)
             Text(track.artist)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 150)
+        .frame(width: 140)
     }
 }
 
@@ -927,21 +987,23 @@ struct CompactTrackCard: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Cover(url: track.artwork).frame(width: 48, height: 48)
+            Cover(url: track.artwork, radius: 8)
+                .frame(width: 44, height: 44)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
-                    .font(.caption.bold())
-                    .foregroundStyle(isCurrent ? .orange : .white)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(isCurrent ? Theme.accent : .white)
                     .lineLimit(1)
                 Text(track.artist)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            Spacer(minLength: 0)
         }
-        .frame(width: 185, alignment: .leading)
+        .frame(width: 180, alignment: .leading)
         .padding(8)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -950,27 +1012,22 @@ struct PlaylistCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .topTrailing) {
-                Cover(url: playlist.artwork)
-                    .frame(width: 145, height: 145)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                Text("\(playlist.trackCount) тр.")
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(8)
-            }
+            Cover(url: playlist.artwork, radius: 12)
+                .frame(width: 140, height: 140)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
             Text(playlist.title)
-                .font(.subheadline.bold())
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.white)
                 .lineLimit(1)
-            Text(playlist.author)
-                .font(.caption)
+            Text("\(playlist.author) · \(playlist.trackCount)")
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 145)
+        .frame(width: 140)
     }
 }
 
@@ -987,31 +1044,29 @@ struct TrackRow: View {
             Button(action: onTap) {
                 HStack(spacing: 12) {
                     ZStack {
-                        Cover(url: track.artwork).frame(width: 54, height: 54)
+                        Cover(url: track.artwork, radius: 8)
+                            .frame(width: 48, height: 48)
                         if isCurrent {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Color.black.opacity(0.45))
-                                .frame(width: 54, height: 54)
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.black.opacity(0.5))
+                                .frame(width: 48, height: 48)
                             Image(systemName: "waveform")
-                                .foregroundStyle(.orange)
-                                .font(.title3.bold())
+                                .foregroundStyle(Theme.accent)
+                                .font(.subheadline.weight(.semibold))
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(track.title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.subheadline.weight(isCurrent ? .semibold : .regular))
                             .lineLimit(1)
-                            .foregroundStyle(isCurrent ? Color.orange : .white)
+                            .foregroundStyle(isCurrent ? Theme.accent : .white)
 
-                        HStack(spacing: 6) {
+                        HStack(spacing: 4) {
                             Text(track.artist)
                                 .lineLimit(1)
                             if let dur = track.durationMs, dur > 0 {
-                                Text("• \(formatMs(dur))")
-                            }
-                            if let plays = track.playbackCount, plays > 0 {
-                                Text("• ▶ \(formatCount(plays))")
+                                Text("· \(formatMs(dur))")
                             }
                         }
                         .font(.caption)
@@ -1024,41 +1079,50 @@ struct TrackRow: View {
 
             Button(action: onLike) {
                 Image(systemName: isLiked ? "heart.fill" : "heart")
-                    .foregroundStyle(isLiked ? .orange : .secondary)
-                    .padding(6)
+                    .font(.subheadline)
+                    .foregroundStyle(isLiked ? Theme.accent : .white.opacity(0.35))
+                    .frame(width: 32, height: 32)
             }
             .buttonStyle(.plain)
 
             Menu {
                 Button(action: onRadio) {
-                    Label("Запустить радио по треку", systemImage: "dot.radiowaves.left.and.right")
+                    Label("Радио по треку", systemImage: "dot.radiowaves.left.and.right")
                 }
                 Button(action: onLike) {
-                    Label(isLiked ? "Убрать из лайков" : "В лайки", systemImage: isLiked ? "heart.slash" : "heart")
+                    Label(isLiked ? "Убрать из медиатеки" : "Сохранить", systemImage: isLiked ? "heart.slash" : "heart")
                 }
                 Button {
                     UIPasteboard.general.string = track.url
                 } label: {
-                    Label("Скопировать ссылку", systemImage: "doc.on.doc")
+                    Label("Скопировать ссылку", systemImage: "link")
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .foregroundStyle(.secondary)
-                    .padding(8)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.4))
+                    .frame(width: 28, height: 32)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 5)
+        .contextMenu {
+            Button(action: onRadio) {
+                Label("Радио по треку", systemImage: "dot.radiowaves.left.and.right")
+            }
+            Button(action: onLike) {
+                Label(isLiked ? "Убрать из медиатеки" : "Сохранить", systemImage: isLiked ? "heart.slash" : "heart")
+            }
+            Button {
+                UIPasteboard.general.string = track.url
+            } label: {
+                Label("Скопировать ссылку", systemImage: "link")
+            }
+        }
     }
 
     private func formatMs(_ ms: Int) -> String {
         let s = ms / 1000
         return String(format: "%d:%02d", s / 60, s % 60)
-    }
-
-    private func formatCount(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
-        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
-        return "\(n)"
     }
 }
 
@@ -1067,7 +1131,7 @@ struct StatView: View {
     let label: String
     var body: some View {
         VStack(spacing: 2) {
-            Text(value).font(.headline).foregroundStyle(.white)
+            Text(value).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
             Text(label).font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -1075,16 +1139,20 @@ struct StatView: View {
 
 struct Cover: View {
     let url: String?
+    var radius: CGFloat = 10
+
     var body: some View {
         AsyncImage(url: url.flatMap { URL(string: $0.replacingOccurrences(of: "-large", with: "-t500x500")) }) { img in
             img.resizable().scaledToFill()
         } placeholder: {
             ZStack {
-                Color.white.opacity(0.08)
-                Image(systemName: "music.note").foregroundStyle(.secondary)
+                Theme.surfaceElevated
+                Image(systemName: "music.note")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.2))
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 }
 
@@ -1101,31 +1169,35 @@ struct PlaylistDetailView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
-                ScrollView {
+                Theme.bg.ignoresSafeArea()
+                ScrollView(showsIndicators: false) {
                     VStack(spacing: 16) {
-                        Cover(url: playlist.artwork)
-                            .frame(width: 170, height: 170)
-                            .shadow(radius: 20)
+                        Cover(url: playlist.artwork, radius: 14)
+                            .frame(width: 160, height: 160)
+                            .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
                             .padding(.top, 12)
 
                         VStack(spacing: 4) {
-                            Text(playlist.title).font(.title3.bold()).multilineTextAlignment(.center)
-                            Text(playlist.author).font(.subheadline).foregroundStyle(.secondary)
+                            Text(playlist.title)
+                                .font(.title3.weight(.bold))
+                                .multilineTextAlignment(.center)
+                            Text(playlist.author)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
-                        .padding(.horizontal)
+                        .padding(.horizontal, 16)
 
                         if !tracks.isEmpty {
-                            HStack(spacing: 12) {
+                            HStack(spacing: 10) {
                                 Button {
                                     onPlay(tracks, 0)
                                     dismiss()
                                 } label: {
                                     Label("Слушать", systemImage: "play.fill")
-                                        .font(.subheadline.bold())
+                                        .font(.subheadline.weight(.semibold))
                                         .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 12)
-                                        .background(Color.orange, in: RoundedRectangle(cornerRadius: 12))
+                                        .padding(.vertical, 11)
+                                        .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         .foregroundStyle(.black)
                                 }
                                 Button {
@@ -1133,21 +1205,20 @@ struct PlaylistDetailView: View {
                                     dismiss()
                                 } label: {
                                     Label("Перемешать", systemImage: "shuffle")
-                                        .font(.subheadline.bold())
+                                        .font(.subheadline.weight(.medium))
                                         .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 12)
-                                        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+                                        .padding(.vertical, 11)
+                                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         .foregroundStyle(.white)
                                 }
                             }
-                            .padding(.horizontal)
+                            .padding(.horizontal, 16)
                         }
 
                         if loading {
-                            ProgressView("Загружаем треки плейлиста...")
-                                .padding(.top, 24)
+                            ProgressView().tint(.secondary).padding(.top, 24)
                         } else {
-                            LazyVStack(spacing: 6) {
+                            LazyVStack(spacing: 2) {
                                 ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, t in
                                     TrackRow(
                                         track: t,
@@ -1165,7 +1236,7 @@ struct PlaylistDetailView: View {
                                             }
                                         }
                                     )
-                                    .padding(.horizontal)
+                                    .padding(.horizontal, 16)
                                 }
                             }
                         }
@@ -1199,40 +1270,40 @@ struct ArtistDetailView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
-                ScrollView {
+                Theme.bg.ignoresSafeArea()
+                ScrollView(showsIndicators: false) {
                     VStack(spacing: 16) {
-                        Cover(url: artist.avatarUrl)
-                            .frame(width: 120, height: 120)
+                        Cover(url: artist.avatarUrl, radius: 52)
+                            .frame(width: 104, height: 104)
                             .clipShape(Circle())
-                            .overlay(Circle().stroke(Color.orange, lineWidth: 2))
                             .padding(.top, 12)
 
-                        Text(artist.username).font(.title2.bold())
-                        Text("\(artist.followersCount ?? 0) подписчиков")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        VStack(spacing: 4) {
+                            Text(artist.username).font(.title3.weight(.bold))
+                            Text("\(artist.followersCount ?? 0) подписчиков")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
 
                         if !tracks.isEmpty {
                             Button {
                                 onPlay(tracks, 0)
                                 dismiss()
                             } label: {
-                                Label("Слушать популярные треки", systemImage: "play.fill")
-                                    .font(.subheadline.bold())
+                                Label("Слушать", systemImage: "play.fill")
+                                    .font(.subheadline.weight(.semibold))
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                                    .background(Color.orange, in: RoundedRectangle(cornerRadius: 12))
+                                    .padding(.vertical, 11)
+                                    .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                     .foregroundStyle(.black)
                             }
-                            .padding(.horizontal)
+                            .padding(.horizontal, 16)
                         }
 
                         if loading {
-                            ProgressView("Загружаем треки артиста...")
-                                .padding(.top, 24)
+                            ProgressView().tint(.secondary).padding(.top, 24)
                         } else {
-                            LazyVStack(spacing: 6) {
+                            LazyVStack(spacing: 2) {
                                 ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, t in
                                     TrackRow(
                                         track: t,
@@ -1250,7 +1321,7 @@ struct ArtistDetailView: View {
                                             }
                                         }
                                     )
-                                    .padding(.horizontal)
+                                    .padding(.horizontal, 16)
                                 }
                             }
                         }
@@ -1273,66 +1344,101 @@ struct ArtistDetailView: View {
     }
 }
 
-// MARK: - MiniPlayer & Full-Screen NowPlayingView
+// MARK: - Minimalist MiniPlayer & Full-Screen NowPlayingView
 
 struct MiniPlayer: View {
     @EnvironmentObject var p: PlayerEngine
     var open: () -> Void
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Cover(url: p.current?.artwork).frame(width: 44, height: 44)
+                Cover(url: p.current?.artwork, radius: 8)
+                    .frame(width: 40, height: 40)
+
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(p.current?.title ?? "")
-                            .font(.subheadline.bold())
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white)
                             .lineLimit(1)
                         if p.speed != .normal {
                             Text(p.speed.shortLabel)
-                                .font(.system(size: 9, weight: .bold))
+                                .font(.system(size: 10, weight: .semibold))
                                 .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(Color.orange, in: Capsule())
-                                .foregroundStyle(.black)
+                                .padding(.vertical, 1)
+                                .background(Color.white.opacity(0.14), in: Capsule())
+                                .foregroundStyle(.white.opacity(0.9))
                         }
                     }
                     Text(p.current?.artist ?? "")
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+
                 Spacer()
+
                 if let t = p.current {
-                    Button { p.toggleLike(t) } label: {
+                    Button {
+                        haptic(.light)
+                        p.toggleLike(t)
+                    } label: {
                         Image(systemName: p.isLiked(t) ? "heart.fill" : "heart")
-                            .foregroundStyle(p.isLiked(t) ? .orange : .white)
+                            .font(.subheadline)
+                            .foregroundStyle(p.isLiked(t) ? Theme.accent : .white.opacity(0.7))
+                            .frame(width: 34, height: 34)
                     }
-                    .padding(.horizontal, 4)
+                    .buttonStyle(.plain)
                 }
-                Button { p.toggle() } label: {
+
+                Button {
+                    haptic(.light)
+                    p.toggle()
+                } label: {
                     Image(systemName: p.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
                 }
-                .padding(.horizontal, 6)
-                Button { p.next() } label: {
-                    Image(systemName: "forward.fill")
-                }
+                .buttonStyle(.plain)
             }
-            .font(.title3)
-            .padding(10)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
 
             GeometryReader { geo in
-                let ratio = p.duration > 0 ? min(max(p.position / p.duration, 0), 1) : 0
+                let dur = max(p.duration, Double(p.current?.durationMs ?? 0) / 1000.0)
+                let ratio = dur > 0 ? min(max(p.position / dur, 0), 1) : 0
                 ZStack(alignment: .leading) {
-                    Rectangle().fill(Color.white.opacity(0.1))
-                    Rectangle().fill(Color.orange).frame(width: geo.size.width * ratio)
+                    Rectangle().fill(Color.white.opacity(0.08))
+                    Rectangle().fill(Color.white.opacity(0.85)).frame(width: geo.size.width * ratio)
                 }
             }
             .frame(height: 2)
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 1))
-        .padding(.horizontal, 10)
+        .background(Theme.surfaceElevated.opacity(0.96), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.45), radius: 14, y: 6)
+        .padding(.horizontal, 12)
+        .contentShape(Rectangle())
         .onTapGesture(perform: open)
+        .gesture(
+            DragGesture(minimumDistance: 24)
+                .onEnded { val in
+                    if val.translation.width < -40 {
+                        haptic(.light)
+                        p.next()
+                    } else if val.translation.width > 40 {
+                        haptic(.light)
+                        p.previous()
+                    } else if val.translation.height < -30 {
+                        open()
+                    }
+                }
+        )
     }
 }
 
@@ -1340,6 +1446,7 @@ struct NowPlayingView: View {
     @EnvironmentObject var p: PlayerEngine
     @Environment(\.dismiss) var dismiss
     @State private var scrub: Double?
+    @State private var isScrubbing = false
     @State private var showQueue = false
     @State private var dragOffset: CGFloat = 0
 
@@ -1356,15 +1463,16 @@ struct NowPlayingView: View {
     var body: some View {
         GeometryReader { screen in
             ZStack {
-                // Constrained blurred background so it NEVER expands layout width beyond screen.size.width
-                Color.black.ignoresSafeArea()
-                Cover(url: p.current?.artwork)
+                Theme.bg.ignoresSafeArea()
+
+                // Ambient blurred cover strictly constrained to screen dimensions
+                Cover(url: p.current?.artwork, radius: 0)
                     .frame(width: screen.size.width, height: screen.size.height)
-                    .blur(radius: 70)
-                    .opacity(0.5)
+                    .blur(radius: 85)
+                    .opacity(0.32)
                     .overlay(
                         LinearGradient(
-                            colors: [.black.opacity(0.35), .black.opacity(0.65), .black.opacity(0.92)],
+                            colors: [.black.opacity(0.3), .black.opacity(0.65), Theme.bg],
                             startPoint: .top,
                             endPoint: .bottom
                         )
@@ -1372,290 +1480,332 @@ struct NowPlayingView: View {
                     .clipped()
                     .ignoresSafeArea()
 
-                VStack(spacing: 14) {
-                    // Drag indicator capsule
+                VStack(spacing: 0) {
+                    // Grab handle
                     Capsule()
-                        .fill(Color.white.opacity(0.35))
-                        .frame(width: 42, height: 5)
-                        .padding(.top, 8)
-                        .onTapGesture { dismiss() }
+                        .fill(Color.white.opacity(0.25))
+                        .frame(width: 36, height: 4)
+                        .padding(.top, 10)
+                        .padding(.bottom, 8)
 
-                    // Top Bar with explicit "Назад" button
+                    // Minimalist Top Bar
                     HStack {
                         Button {
                             dismiss()
                         } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "chevron.down")
-                                    .font(.subheadline.bold())
-                                Text("Назад")
-                                    .font(.subheadline.bold())
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.08), in: Circle())
                         }
 
                         Spacer()
 
                         VStack(spacing: 2) {
-                            Text(p.autoRadio ? "АВТОВОЛНА ВКЛ" : "СЕЙЧАС ИГРАЕТ")
-                                .font(.caption2.weight(.heavy))
-                                .tracking(1.1)
-                                .foregroundStyle(.orange)
                             if let mins = p.sleepMinutesRemaining {
-                                Text("Сон через \(mins) мин")
-                                    .font(.caption2)
+                                Text("Таймер · \(mins) мин")
+                                    .font(.caption2.weight(.medium))
                                     .foregroundStyle(.secondary)
+                            } else if p.autoRadio {
+                                Text("Автоволна")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.white.opacity(0.45))
                             }
                         }
 
                         Spacer()
 
                         Menu {
-                            Section("Таймер сна") {
-                                Button("Выключить таймер") { p.setSleepTimer(minutes: nil) }
-                                Button("Через 15 минут") { p.setSleepTimer(minutes: 15) }
-                                Button("Через 30 минут") { p.setSleepTimer(minutes: 30) }
-                                Button("Через 60 минут") { p.setSleepTimer(minutes: 60) }
+                            Section("Скорость и тон") {
+                                ForEach(PlaybackSpeed.allCases) { mode in
+                                    Button {
+                                        p.speed = mode
+                                    } label: {
+                                        if p.speed == mode {
+                                            Label(mode.label, systemImage: "checkmark")
+                                        } else {
+                                            Text(mode.label)
+                                        }
+                                    }
+                                }
+                                Toggle("Менять тон (Pitch)", isOn: $p.pitchShift)
                             }
-                            Section("Режим волны") {
+                            Section("Воспроизведение") {
                                 Toggle("Бесконечная автоволна", isOn: $p.autoRadio)
-                                Toggle("Изменять тон (Pitch) со скоростью", isOn: $p.pitchShift)
+                            }
+                            Section("Таймер сна") {
+                                Button("Выключить") { p.setSleepTimer(minutes: nil) }
+                                Button("15 минут") { p.setSleepTimer(minutes: 15) }
+                                Button("30 минут") { p.setSleepTimer(minutes: 30) }
+                                Button("60 минут") { p.setSleepTimer(minutes: 60) }
                             }
                             if let t = p.current {
                                 Button {
                                     UIPasteboard.general.string = t.url
                                 } label: {
-                                    Label("Скопировать ссылку", systemImage: "doc.on.doc")
+                                    Label("Скопировать ссылку", systemImage: "link")
                                 }
                             }
                         } label: {
                             Image(systemName: "ellipsis")
-                                .font(.subheadline.bold())
-                                .foregroundStyle(.white)
-                                .frame(width: 38, height: 34)
-                                .background(.ultraThinMaterial, in: Capsule())
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.08), in: Circle())
                         }
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 24)
 
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 16)
 
-                    // Album Artwork constrained to screen width
-                    let artSize = min(screen.size.width - 56, screen.size.height * 0.34)
-                    Cover(url: p.current?.artwork)
+                    // Artwork
+                    let artSize = min(screen.size.width - 56, screen.size.height * 0.39)
+                    Cover(url: p.current?.artwork, radius: 18)
                         .frame(width: artSize, height: artSize)
-                        .clipShape(RoundedRectangle(cornerRadius: 24))
-                        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.18), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.6), radius: 24, y: 10)
-                        .scaleEffect(p.isPlaying ? 1.0 : 0.92)
-                        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: p.isPlaying)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.55), radius: 28, y: 14)
+                        .scaleEffect(p.isPlaying ? 1.0 : 0.93)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.78), value: p.isPlaying)
 
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 22)
 
-                    // Track Title, Artist, Stats & Heart Button
-                    HStack(alignment: .center, spacing: 12) {
+                    // Track Info + Heart
+                    HStack(alignment: .center, spacing: 14) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(p.current?.title ?? "Не выбран трек")
-                                .font(.title3.bold())
+                                .font(.title3.weight(.semibold))
                                 .foregroundStyle(.white)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
+                                .lineLimit(1)
 
-                            HStack(spacing: 8) {
-                                Text(p.current?.artist ?? "SoundCloud")
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.orange)
-                                    .lineLimit(1)
-                                if let genre = p.current?.genre, !genre.isEmpty {
-                                    Text("• \(genre)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                            }
+                            Text(p.current?.artist ?? "SoundCloud")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(1)
                         }
+
                         Spacer()
+
                         if let t = p.current {
                             Button {
+                                haptic(.light)
                                 p.toggleLike(t)
                             } label: {
                                 Image(systemName: p.isLiked(t) ? "heart.fill" : "heart")
-                                    .font(.title2)
-                                    .foregroundStyle(p.isLiked(t) ? .orange : .white)
-                                    .frame(width: 46, height: 46)
-                                    .background(.ultraThinMaterial, in: Circle())
+                                    .font(.system(size: 20, weight: .medium))
+                                    .foregroundStyle(p.isLiked(t) ? Theme.accent : .white.opacity(0.65))
+                                    .frame(width: 40, height: 40)
+                                    .background(Color.white.opacity(0.07), in: Circle())
                             }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .padding(.horizontal, 22)
+                    .padding(.horizontal, 28)
 
-                    // Vibe Speed Selector (Slowed / Normal / Nightcore)
-                    HStack(spacing: 8) {
-                        ForEach(PlaybackSpeed.allCases) { mode in
-                            Button {
-                                p.speed = mode
-                            } label: {
-                                Text(mode.label)
-                                    .font(.caption.bold())
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .background(
-                                        p.speed == mode ? Color.orange : Color.white.opacity(0.12),
-                                        in: Capsule()
-                                    )
-                                    .foregroundStyle(p.speed == mode ? .black : .white)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
-
-                    // Interactive SoundCloud Waveform + Scrubber + Time & -10s/+10s
-                    VStack(spacing: 8) {
-                        WaveformScrubber(
+                    // Tactile Minimalist Progress Bar (Apple Music style)
+                    VStack(spacing: 6) {
+                        MinimalScrubber(
                             progress: effectiveDuration > 0 ? currentPos / effectiveDuration : 0,
-                            seed: p.current?.title.hashValue ?? 42
-                        ) { ratio in
-                            let newSec = ratio * effectiveDuration
-                            scrub = newSec
-                            p.seek(newSec)
-                            scrub = nil
-                        } onDrag: { ratio in
-                            scrub = ratio * effectiveDuration
-                        }
-                        .frame(height: 38)
-
-                        Slider(
-                            value: Binding(
-                                get: { currentPos },
-                                set: { scrub = $0 }
-                            ),
-                            in: 0...max(effectiveDuration, 1)
-                        ) { editing in
-                            if !editing, let s = scrub {
-                                p.seek(s)
-                                scrub = nil
+                            isDragging: $isScrubbing,
+                            onScrubChange: { ratio in
+                                scrub = ratio * effectiveDuration
+                            },
+                            onScrubEnd: { ratio in
+                                let target = ratio * effectiveDuration
+                                scrub = target
+                                haptic(.light)
+                                p.seek(target)
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                    scrub = nil
+                                }
                             }
-                        }
-                        .tint(.orange)
+                        )
+                        .frame(height: 28)
 
                         HStack {
                             Text(fmt(currentPos))
-                                .font(.caption.monospacedDigit().bold())
-                                .foregroundStyle(.orange)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(isScrubbing ? .white : .white.opacity(0.45))
 
                             Spacer()
 
-                            HStack(spacing: 14) {
-                                Button {
-                                    p.skip(by: -10)
-                                } label: {
-                                    Label("10с", systemImage: "gobackward.10")
-                                        .font(.caption2.bold())
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(Color.white.opacity(0.1), in: Capsule())
-                                }
-                                Button {
-                                    p.skip(by: 10)
-                                } label: {
-                                    Label("10с", systemImage: "goforward.10")
-                                        .font(.caption2.bold())
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(Color.white.opacity(0.1), in: Capsule())
-                                }
+                            if p.isLoadingTrack {
+                                Text("Загрузка...")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.4))
                             }
-                            .foregroundStyle(.white.opacity(0.85))
 
                             Spacer()
 
-                            Text(fmt(effectiveDuration))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                            Text("-\(fmt(max(0, effectiveDuration - currentPos)))")
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(isScrubbing ? .white : .white.opacity(0.45))
                         }
                     }
-                    .padding(.horizontal, 22)
+                    .padding(.horizontal, 28)
+                    .padding(.top, 18)
 
-                    // Main Transport Controls
-                    HStack(spacing: 28) {
-                        Button { p.shuffle.toggle() } label: {
-                            Image(systemName: "shuffle")
-                                .font(.title3)
-                                .foregroundStyle(p.shuffle ? Color.orange : .white.opacity(0.7))
+                    Spacer(minLength: 18)
+
+                    // Primary Transport Controls
+                    HStack(spacing: 0) {
+                        Button {
+                            haptic(.light)
+                            p.shuffle.toggle()
+                        } label: {
+                            VStack(spacing: 4) {
+                                Image(systemName: "shuffle")
+                                    .font(.system(size: 17, weight: .medium))
+                                    .foregroundStyle(p.shuffle ? .white : .white.opacity(0.4))
+                                Circle()
+                                    .fill(p.shuffle ? Theme.accent : .clear)
+                                    .frame(width: 4, height: 4)
+                            }
+                            .frame(width: 44, height: 44)
                         }
-                        Button { p.previous() } label: {
+
+                        Spacer()
+
+                        Button {
+                            haptic(.light)
+                            p.previous()
+                        } label: {
                             Image(systemName: "backward.fill")
-                                .font(.title)
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 52, height: 52)
                         }
-                        Button { p.toggle() } label: {
+
+                        Spacer()
+
+                        Button {
+                            haptic(.medium)
+                            p.toggle()
+                        } label: {
                             ZStack {
                                 Circle()
-                                    .fill(LinearGradient(colors: [.orange, .red], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                    .frame(width: 72, height: 72)
-                                    .shadow(color: .orange.opacity(0.45), radius: 14)
+                                    .fill(.white)
+                                    .frame(width: 66, height: 66)
                                 Image(systemName: p.isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.title.bold())
+                                    .font(.system(size: 24, weight: .bold))
                                     .foregroundStyle(.black)
+                                    .offset(x: p.isPlaying ? 0 : 2)
                             }
                         }
-                        Button { p.next() } label: {
+
+                        Spacer()
+
+                        Button {
+                            haptic(.light)
+                            p.next()
+                        } label: {
                             Image(systemName: "forward.fill")
-                                .font(.title)
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 52, height: 52)
                         }
-                        Button { p.cycleRepeat() } label: {
-                            Image(systemName: p.repeatMode == .one ? "repeat.1" : "repeat")
-                                .font(.title3)
-                                .foregroundStyle(p.repeatMode == .off ? Color.white.opacity(0.7) : .orange)
+
+                        Spacer()
+
+                        Button {
+                            haptic(.light)
+                            p.cycleRepeat()
+                        } label: {
+                            VStack(spacing: 4) {
+                                Image(systemName: p.repeatMode == .one ? "repeat.1" : "repeat")
+                                    .font(.system(size: 17, weight: .medium))
+                                    .foregroundStyle(p.repeatMode == .off ? .white.opacity(0.4) : .white)
+                                Circle()
+                                    .fill(p.repeatMode == .off ? .clear : Theme.accent)
+                                    .frame(width: 4, height: 4)
+                            }
+                            .frame(width: 44, height: 44)
                         }
                     }
-                    .foregroundStyle(.white)
-                    .padding(.top, 2)
+                    .padding(.horizontal, 28)
 
-                    // Bottom Utility Bar (Track Radio & Queue)
-                    HStack(spacing: 14) {
+                    Spacer(minLength: 20)
+
+                    // Compact Bottom Bar: Speed, Radio, Queue
+                    HStack(spacing: 12) {
+                        Button {
+                            haptic(.light)
+                            p.cycleSpeed()
+                        } label: {
+                            HStack(spacing: 5) {
+                                if p.speed != .normal {
+                                    Circle()
+                                        .fill(Theme.accent)
+                                        .frame(width: 6, height: 6)
+                                }
+                                Text(p.speed.label)
+                                    .font(.caption.weight(.medium))
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(
+                                p.speed != .normal ? Color.white.opacity(0.14) : Color.white.opacity(0.06),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(p.speed != .normal ? .white : .white.opacity(0.65))
+                        }
+
+                        Spacer()
+
                         if let t = p.current {
                             Button {
+                                haptic(.light)
                                 Task { await p.startTrackRadio(t) }
                             } label: {
-                                Label("Похожие (Волна)", systemImage: "dot.radiowaves.left.and.right")
-                                    .font(.caption.bold())
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
-                                    .background(.ultraThinMaterial, in: Capsule())
+                                HStack(spacing: 5) {
+                                    Image(systemName: "dot.radiowaves.left.and.right")
+                                    Text("Волна")
+                                }
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(Color.white.opacity(0.06), in: Capsule())
+                                .foregroundStyle(.white.opacity(0.75))
                             }
                         }
 
                         Button {
+                            haptic(.light)
                             showQueue = true
                         } label: {
-                            Label("Очередь (\(p.queue.count))", systemImage: "list.bullet")
-                                .font(.caption.bold())
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(.ultraThinMaterial, in: Capsule())
+                            HStack(spacing: 5) {
+                                Image(systemName: "list.bullet")
+                                Text("\(p.queue.count)")
+                            }
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(Color.white.opacity(0.06), in: Capsule())
+                            .foregroundStyle(.white.opacity(0.75))
                         }
                     }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 22)
-                    .padding(.bottom, 14)
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 22)
                 }
                 .frame(width: screen.size.width)
                 .offset(y: max(0, dragOffset))
                 .gesture(
-                    DragGesture()
+                    DragGesture(minimumDistance: 20)
                         .onChanged { val in
-                            if val.translation.height > 0 {
+                            if !isScrubbing && val.translation.height > 0 && abs(val.translation.height) > abs(val.translation.width) {
                                 dragOffset = val.translation.height
                             }
                         }
                         .onEnded { val in
-                            if val.translation.height > 110 {
+                            if !isScrubbing && val.translation.height > 100 && abs(val.translation.height) > abs(val.translation.width) {
                                 dismiss()
                             } else {
-                                withAnimation(.spring()) { dragOffset = 0 }
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    dragOffset = 0
+                                }
                             }
                         }
                 )
@@ -1672,45 +1822,44 @@ struct NowPlayingView: View {
     }
 }
 
-struct WaveformScrubber: View {
+struct MinimalScrubber: View {
     let progress: Double
-    let seed: Int
-    var onCommit: (Double) -> Void
-    var onDrag: (Double) -> Void
-
-    private let barCount = 44
-
-    private func barHeight(index: Int) -> CGFloat {
-        let v = abs(sin(Double(index) * 0.55 + Double(seed % 17)) * cos(Double(index) * 0.23))
-        return CGFloat(10 + v * 26)
-    }
+    @Binding var isDragging: Bool
+    var onScrubChange: (Double) -> Void
+    var onScrubEnd: (Double) -> Void
 
     var body: some View {
         GeometryReader { geo in
-            HStack(alignment: .center, spacing: 3) {
-                ForEach(0..<barCount, id: \.self) { i in
-                    let barRatio = Double(i) / Double(barCount)
-                    let active = barRatio <= progress
-                    Capsule()
-                        .fill(
-                            active
-                                ? AnyShapeStyle(LinearGradient(colors: [.orange, .red], startPoint: .bottom, endPoint: .top))
-                                : AnyShapeStyle(Color.white.opacity(0.22))
-                        )
-                        .frame(height: barHeight(index: i))
-                }
+            let width = max(geo.size.width, 1)
+            let clamped = min(max(progress, 0), 1)
+            let barHeight: CGFloat = isDragging ? 9 : 4
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(height: barHeight)
+
+                Capsule()
+                    .fill(isDragging ? Color.white : Color.white.opacity(0.88))
+                    .frame(width: max(barHeight, width * clamped), height: barHeight)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
+            .animation(.spring(response: 0.22, dampingFraction: 0.78), value: isDragging)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { val in
-                        let r = min(max(val.location.x / max(geo.size.width, 1), 0), 1)
-                        onDrag(r)
+                        if !isDragging {
+                            isDragging = true
+                            haptic(.light)
+                        }
+                        let r = min(max(val.location.x / width, 0), 1)
+                        onScrubChange(r)
                     }
                     .onEnded { val in
-                        let r = min(max(val.location.x / max(geo.size.width, 1), 0), 1)
-                        onCommit(r)
+                        let r = min(max(val.location.x / width, 0), 1)
+                        isDragging = false
+                        onScrubEnd(r)
                     }
             )
         }
@@ -1724,18 +1873,19 @@ struct QueueSheetView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                Theme.bg.ignoresSafeArea()
                 List {
                     ForEach(Array(p.queue.enumerated()), id: \.element.id) { idx, t in
                         Button {
                             p.play(index: idx)
                         } label: {
                             HStack(spacing: 12) {
-                                Cover(url: t.artwork).frame(width: 44, height: 44)
+                                Cover(url: t.artwork, radius: 6)
+                                    .frame(width: 42, height: 42)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(t.title)
-                                        .font(.subheadline.bold())
-                                        .foregroundStyle(p.currentIndex == idx ? .orange : .white)
+                                        .font(.subheadline.weight(p.currentIndex == idx ? .semibold : .regular))
+                                        .foregroundStyle(p.currentIndex == idx ? Theme.accent : .white)
                                         .lineLimit(1)
                                     Text(t.artist)
                                         .font(.caption)
@@ -1744,7 +1894,9 @@ struct QueueSheetView: View {
                                 }
                                 Spacer()
                                 if p.currentIndex == idx {
-                                    Image(systemName: "waveform").foregroundStyle(.orange)
+                                    Image(systemName: "waveform")
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.accent)
                                 }
                             }
                         }
@@ -1756,7 +1908,7 @@ struct QueueSheetView: View {
                 }
                 .listStyle(.plain)
             }
-            .navigationTitle("Очередь (\(p.queue.count))")
+            .navigationTitle("Очередь")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -1764,5 +1916,6 @@ struct QueueSheetView: View {
                 }
             }
         }
+        .presentationDetents([.medium, .large])
     }
 }

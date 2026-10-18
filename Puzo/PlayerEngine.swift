@@ -51,16 +51,16 @@ enum PlaybackSpeed: Double, CaseIterable, Identifiable {
     var id: Double { rawValue }
     var label: String {
         switch self {
-        case .slowed: return "Slowed 0.85x"
-        case .normal: return "1.0x"
-        case .spedUp: return "Nightcore 1.2x"
+        case .slowed: return "Slowed 0.85×"
+        case .normal: return "1.0×"
+        case .spedUp: return "Nightcore 1.2×"
         }
     }
     var shortLabel: String {
         switch self {
-        case .slowed: return "0.85x"
-        case .normal: return "1x"
-        case .spedUp: return "1.2x"
+        case .slowed: return "0.85×"
+        case .normal: return "1×"
+        case .spedUp: return "1.2×"
         }
     }
 }
@@ -100,6 +100,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
 
     // Playback state
     @Published var isPlaying = false
+    @Published var isLoadingTrack = false
     @Published var position: Double = 0
     @Published var duration: Double = 0
     @Published var shuffle = false
@@ -110,7 +111,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
     @Published var sleepMinutesRemaining: Int?
     @Published var errorText: String?
 
-    let genres = ["Phonk", "Hip-Hop & Rap", "Hyperpop", "Electronic", "Trap", "Cloud Rap", "Lo-Fi", "Techno", "Drum & Bass", "Ambient"]
+    let genres = ["Phonk", "Hip-Hop", "Hyperpop", "Electronic", "Trap", "Cloud Rap", "Lo-Fi", "Techno", "Drum & Bass", "Ambient"]
 
     let webView: WKWebView
     private var avPlayer = AVPlayer()
@@ -251,7 +252,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         if policy == "SNIP" || policy == "BLOCK" { return nil }
 
         let dur = dict["duration"] as? Int ?? 0
-        if dur > 0 && dur <= 31_000 { return nil } // skip 30-sec previews
+        if dur > 0 && dur <= 31_000 { return nil }
 
         let user = dict["user"] as? [String: Any]
         let artist = (dict["publisher_metadata"] as? [String: Any])?["artist"] as? String
@@ -336,7 +337,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         )
     }
 
-    // MARK: Home & Recommendations (SoundCloud-style Feed)
+    // MARK: Home & Recommendations
     func loadHome(genre: String? = nil) async {
         let g = genre ?? selectedGenre
         await MainActor.run {
@@ -345,7 +346,6 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         }
         defer { Task { @MainActor in self.isLoadingHome = false } }
 
-        // 1. Personalized "For You" based on account likes, local likes, or recent plays
         var seeds: [Int] = []
         seeds.append(contentsOf: accountTracks.prefix(4).compactMap(\.scId))
         seeds.append(contentsOf: recentTracks.prefix(3).compactMap(\.scId))
@@ -373,9 +373,8 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             }
         }
 
-        // 2. Genre Trending / Banger Tracks
         if let json = try? await apiGet("/search/tracks", query: [
-            URLQueryItem(name: "q", value: "\(g)热门 OR \(g)"),
+            URLQueryItem(name: "q", value: g),
             URLQueryItem(name: "limit", value: "35")
         ]) {
             if let root = json as? [String: Any],
@@ -391,7 +390,6 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             }
         }
 
-        // 3. Curated Playlists for selected genre
         if let plJson = try? await apiGet("/search/playlists", query: [
             URLQueryItem(name: "q", value: "\(g) mix"),
             URLQueryItem(name: "limit", value: "10")
@@ -403,7 +401,6 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         }
     }
 
-    /// Launches non-stop "My Wave" radio seeded from account likes, recents, or trending
     func startMyWave() {
         var pool: [Track] = []
         pool.append(contentsOf: forYouTracks)
@@ -421,7 +418,6 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         playQueue(unique, startIndex: 0)
     }
 
-    /// Starts radio based on a specific track
     func startTrackRadio(_ seed: Track) async {
         guard let scId = seed.scId else {
             await MainActor.run { playQueue([seed], startIndex: 0) }
@@ -452,7 +448,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             }
             return
         }
-        if q.contains("soundcloud.com/") {
+        if q.contains("soundcloud.com/") || q.contains("on.soundcloud.com/") {
             await add(link: q)
             return
         }
@@ -518,7 +514,6 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             return playlist.tracks
         }
         let direct = rawTracks.compactMap(Self.parseTrack)
-        // SoundCloud sometimes returns stub tracks with only `id` for large playlists; resolve batch of IDs
         let missingIds = rawTracks.compactMap { item -> Int? in
             if item["title"] == nil, let id = item["id"] as? Int { return id }
             return nil
@@ -587,7 +582,6 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         await MainActor.run { isLoadingAccount = true }
         defer { Task { @MainActor in isLoadingAccount = false } }
 
-        // 1. User liked tracks
         if let json = try? await apiGet("/users/\(uid)/track_likes", query: [URLQueryItem(name: "limit", value: "80")]),
            let root = json as? [String: Any],
            let coll = root["collection"] as? [[String: Any]] {
@@ -598,7 +592,6 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             await MainActor.run { self.accountTracks = liked }
         }
 
-        // 2. User playlists & liked playlists
         var allPlaylists: [SCPlaylist] = []
         if let plJson = try? await apiGet("/users/\(uid)/playlists", query: [URLQueryItem(name: "limit", value: "25")]),
            let plRoot = plJson as? [String: Any],
@@ -688,8 +681,8 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         position = 0
         let t = queue[index]
         duration = Double(t.durationMs ?? 0) / 1000.0
+        isLoadingTrack = true
 
-        // Record in recent history
         recentTracks.removeAll { $0.url == t.url }
         recentTracks.insert(t, at: 0)
         if recentTracks.count > 40 { recentTracks = Array(recentTracks.prefix(40)) }
@@ -698,11 +691,11 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         isPlaying = true
         updateNowPlaying()
 
-        // Try direct native AVPlayer streaming first for instant start & speed/pitch controls
         Task {
             if let directURL = await resolveStreamURL(for: t) {
                 await MainActor.run {
                     self.usingNativePlayer = true
+                    self.isLoadingTrack = false
                     self.js("if(w) w.pause();")
                     let item = AVPlayerItem(url: directURL)
                     item.audioTimePitchAlgorithm = self.pitchShift ? .varispeed : .timeDomain
@@ -713,13 +706,13 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             } else {
                 await MainActor.run {
                     self.usingNativePlayer = false
+                    self.isLoadingTrack = false
                     self.avPlayer.pause()
                     self.js("loadTrack(\(Self.q(t.url)))")
                 }
             }
         }
 
-        // If near end of queue and autoRadio is enabled, prefetch related tracks
         if autoRadio && index >= queue.count - 2, let scId = t.scId {
             Task { await appendAutoRadio(seedId: scId) }
         }
@@ -805,7 +798,8 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
     }
 
     func seek(_ s: Double) {
-        let clamped = max(0, min(s, max(duration, 1)))
+        let effectiveMax = duration > 1 ? duration : (Double(current?.durationMs ?? 180_000) / 1000.0)
+        let clamped = max(0, min(s, max(effectiveMax, 1)))
         position = clamped
         if usingNativePlayer {
             let target = CMTime(seconds: clamped, preferredTimescale: 600)
@@ -820,7 +814,16 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         seek(position + delta)
     }
 
-    func cycleRepeat() { repeatMode = RepeatMode(rawValue: (repeatMode.rawValue + 1) % 3)! }
+    func cycleRepeat() {
+        repeatMode = RepeatMode(rawValue: (repeatMode.rawValue + 1) % 3)!
+    }
+
+    func cycleSpeed() {
+        let all = PlaybackSpeed.allCases
+        if let idx = all.firstIndex(of: speed) {
+            speed = all[(idx + 1) % all.count]
+        }
+    }
 
     private func applySpeed() {
         guard usingNativePlayer else { return }
