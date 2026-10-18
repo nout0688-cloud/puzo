@@ -13,6 +13,30 @@ private func haptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
     UIImpactFeedbackGenerator(style: style).impactOccurred()
 }
 
+struct NotchWatermark: View {
+    var body: some View {
+        VStack {
+            HStack(spacing: 5) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 10, weight: .heavy))
+                Text("PuZo player")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(0.3)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Theme.accent, in: Capsule())
+            .padding(.top, 9)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var p: PlayerEngine
     @State private var showNow = false
@@ -59,6 +83,8 @@ struct ContentView: View {
             HiddenWebView(webView: p.webView)
                 .frame(width: 1, height: 1)
                 .opacity(0.01)
+
+            NotchWatermark()
         }
         .preferredColorScheme(.dark)
         .alert("Открыть по ссылке", isPresented: $showAdd) {
@@ -1142,17 +1168,20 @@ struct Cover: View {
     var radius: CGFloat = 10
 
     var body: some View {
-        AsyncImage(url: url.flatMap { URL(string: $0.replacingOccurrences(of: "-large", with: "-t500x500")) }) { img in
-            img.resizable().scaledToFill()
-        } placeholder: {
-            ZStack {
-                Theme.surfaceElevated
-                Image(systemName: "music.note")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.2))
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        Color.clear
+            .overlay(
+                AsyncImage(url: url.flatMap { URL(string: $0.replacingOccurrences(of: "-large", with: "-t500x500")) }) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    ZStack {
+                        Theme.surfaceElevated
+                        Image(systemName: "music.note")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.2))
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 }
 
@@ -1809,6 +1838,8 @@ struct NowPlayingView: View {
                             }
                         }
                 )
+
+                NotchWatermark()
             }
         }
         .sheet(isPresented: $showQueue) {
