@@ -3,43 +3,93 @@ import WebKit
 import AVFoundation
 import MediaPlayer
 
-struct Track: Identifiable, Codable, Equatable {
-    var id = UUID()
+struct Track: Identifiable, Codable, Equatable, Hashable {
+    var id: String { url }
     var scId: Int?
     var url: String
     var title: String
     var artist: String
+    var artistId: Int?
+    var artistAvatar: String?
     var artwork: String?
     var durationMs: Int?
+    var playbackCount: Int?
+    var likesCount: Int?
+    var genre: String?
+    var streamUrl: String?
+    var hlsUrl: String?
 }
 
-struct SCUser: Codable, Equatable {
+struct SCPlaylist: Identifiable, Codable, Equatable {
+    var id: Int
+    var title: String
+    var author: String
+    var artwork: String?
+    var trackCount: Int
+    var permalinkUrl: String
+    var tracks: [Track]
+}
+
+struct SCUser: Identifiable, Codable, Equatable {
     var id: Int
     var username: String
     var avatarUrl: String?
     var permalinkUrl: String
+    var followersCount: Int?
+    var trackCount: Int?
+    var likesCount: Int?
 }
 
 enum RepeatMode: Int { case off, all, one }
 
-/// Drives the official SoundCloud widget inside a hidden WKWebView,
-/// scrapes client_id dynamically from SoundCloud web assets for keyless search,
-/// and handles cookie/interceptor-based account login without official API keys.
-final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
-    @Published var tracks: [Track] = [] { didSet { save() } }
-    @Published var searchResults: [Track] = []
-    @Published var accountTracks: [Track] = []
-    @Published var isSearching = false
-    @Published var isLoadingAccount = false
-    @Published var currentIndex: Int?
-    @Published var isPlaying = false
-    @Published var position: Double = 0   // seconds
-    @Published var duration: Double = 0
-    @Published var shuffle = false
-    @Published var repeatMode: RepeatMode = .off
-    @Published var errorText: String?
+enum PlaybackSpeed: Double, CaseIterable, Identifiable {
+    case slowed = 0.85
+    case normal = 1.0
+    case spedUp = 1.18
 
+    var id: Double { rawValue }
+    var label: String {
+        switch self {
+        case .slowed: return "Slowed 0.85x"
+        case .normal: return "1.0x"
+        case .spedUp: return "Nightcore 1.2x"
+        }
+    }
+    var shortLabel: String {
+        switch self {
+        case .slowed: return "0.85x"
+        case .normal: return "1x"
+        case .spedUp: return "1.2x"
+        }
+    }
+}
+
+final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
+    // Queue & Library
+    @Published var queue: [Track] = []
+    @Published var currentIndex: Int?
+    @Published var likedTracks: [Track] = [] { didSet { saveLikes() } }
+    @Published var recentTracks: [Track] = [] { didSet { saveRecents() } }
+
+    // Home & Discovery
+    @Published var forYouTracks: [Track] = []
+    @Published var trendingTracks: [Track] = []
+    @Published var relatedToRecentTracks: [Track] = []
+    @Published var featuredPlaylists: [SCPlaylist] = []
+    @Published var selectedGenre: String = "Phonk"
+    @Published var isLoadingHome = false
+
+    // Search
+    @Published var searchResults: [Track] = []
+    @Published var searchPlaylists: [SCPlaylist] = []
+    @Published var searchUsers: [SCUser] = []
+    @Published var isSearching = false
+
+    // Account
     @Published var currentUser: SCUser? { didSet { saveUser() } }
+    @Published var accountTracks: [Track] = []
+    @Published var accountPlaylists: [SCPlaylist] = []
+    @Published var isLoadingAccount = false
     @Published var oauthToken: String? {
         didSet {
             if let t = oauthToken { UserDefaults.standard.set(t, forKey: tokenKey) }
@@ -47,20 +97,40 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         }
     }
 
+    // Playback state
+    @Published var isPlaying = false
+    @Published var position: Double = 0
+    @Published var duration: Double = 0
+    @Published var shuffle = false
+    @Published var repeatMode: RepeatMode = .off
+    @Published var autoRadio = true
+    @Published var speed: PlaybackSpeed = .normal { didSet { applySpeed() } }
+    @Published var pitchShift = true { didSet { applySpeed() } }
+    @Published var sleepMinutesRemaining: Int?
+    @Published var errorText: String?
+
+    let genres = ["Phonk", "Hip-Hop & Rap", "Hyperpop", "Electronic", "Trap", "Cloud Rap", "Lo-Fi", "Techno", "Drum & Bass", "Ambient"]
+
     let webView: WKWebView
+    private var avPlayer = AVPlayer()
+    private var timeObserver: Any?
+    private var endObserver: NSObjectProtocol?
+    private var usingNativePlayer = false
+    private var sleepTimer: Timer?
     private var artworkImage: UIImage?
-    private let storeKey = "puzo.tracks"
+
+    private let likesKey = "puzo.liked.v2"
+    private let recentsKey = "puzo.recents.v2"
     private let userKey = "puzo.user"
     private let tokenKey = "puzo.oauthToken"
     private let clientIdKey = "puzo.clientId"
     private var cachedClientId: String = UserDefaults.standard.string(forKey: "puzo.clientId") ?? "tHVbSbDP4TaoMbPppngv6Tdry83vNbMQ"
 
-    private let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     private let desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
     var current: Track? {
-        guard let i = currentIndex, tracks.indices.contains(i) else { return nil }
-        return tracks[i]
+        guard let i = currentIndex, queue.indices.contains(i) else { return nil }
+        return queue[i]
     }
 
     override init() {
@@ -74,26 +144,34 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         ucc.add(self, name: "puzo")
         webView.loadHTMLString(Self.html, baseURL: URL(string: "https://soundcloud.com"))
 
-        if let d = UserDefaults.standard.data(forKey: storeKey),
-           let t = try? JSONDecoder().decode([Track].self, from: d) { tracks = t }
+        if let d = UserDefaults.standard.data(forKey: likesKey),
+           let t = try? JSONDecoder().decode([Track].self, from: d) { likedTracks = t }
+        if let d = UserDefaults.standard.data(forKey: recentsKey),
+           let t = try? JSONDecoder().decode([Track].self, from: d) { recentTracks = t }
         if let ud = UserDefaults.standard.data(forKey: userKey),
            let u = try? JSONDecoder().decode(SCUser.self, from: ud) { currentUser = u }
         oauthToken = UserDefaults.standard.string(forKey: tokenKey)
 
         setupAudioSession()
+        setupNativePlayer()
         setupRemote()
 
         Task {
             _ = try? await refreshClientId()
             if currentUser != nil {
-                await fetchAccountLikes()
+                await fetchAccountData()
             }
+            await loadHome(genre: selectedGenre)
         }
     }
 
     // MARK: Persistence
-    private func save() {
-        if let d = try? JSONEncoder().encode(tracks) { UserDefaults.standard.set(d, forKey: storeKey) }
+    private func saveLikes() {
+        if let d = try? JSONEncoder().encode(likedTracks) { UserDefaults.standard.set(d, forKey: likesKey) }
+    }
+
+    private func saveRecents() {
+        if let d = try? JSONEncoder().encode(recentTracks) { UserDefaults.standard.set(d, forKey: recentsKey) }
     }
 
     private func saveUser() {
@@ -104,7 +182,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         }
     }
 
-    // MARK: Keyless Client ID & API-v2 Helper
+    // MARK: Keyless Client ID & API-v2
     func updateClientId(_ id: String) {
         guard id.count >= 16 else { return }
         cachedClientId = id
@@ -138,7 +216,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         return cachedClientId
     }
 
-    private func apiGet(_ path: String, query: [URLQueryItem] = [], retry: Bool = true) async throws -> Any {
+    func apiGet(_ path: String, query: [URLQueryItem] = [], retry: Bool = true) async throws -> Any {
         var comps = URLComponents(string: path.hasPrefix("http") ? path : "https://api-v2.soundcloud.com\(path)")!
         var items = query
         if !items.contains(where: { $0.name == "client_id" }) {
@@ -162,24 +240,212 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         return try JSONSerialization.jsonObject(with: data)
     }
 
-    private static func parseTrack(_ dict: [String: Any]) -> Track? {
+    // MARK: Parsers (filters out 30s Go+ SNIP/BLOCK previews)
+    static func parseTrack(_ dict: [String: Any]) -> Track? {
         guard let permalink = dict["permalink_url"] as? String,
               let title = dict["title"] as? String else { return nil }
+
+        let policy = (dict["policy"] as? String) ?? "ALLOW"
+        if policy == "SNIP" || policy == "BLOCK" { return nil }
+
+        let dur = dict["duration"] as? Int ?? 0
+        if dur > 0 && dur <= 31_000 { return nil } // skip 30-sec previews
+
         let user = dict["user"] as? [String: Any]
         let artist = (dict["publisher_metadata"] as? [String: Any])?["artist"] as? String
             ?? user?["username"] as? String
             ?? "SoundCloud"
-        let artwork = (dict["artwork_url"] as? String) ?? (user?["avatar_url"] as? String)
+        let artistId = user?["id"] as? Int
+        let artistAvatar = user?["avatar_url"] as? String
+        let artwork = (dict["artwork_url"] as? String) ?? artistAvatar
         let scId = dict["id"] as? Int
-        let dur = dict["duration"] as? Int
-        return Track(scId: scId, url: permalink, title: title, artist: artist, artwork: artwork, durationMs: dur)
+        let plays = dict["playback_count"] as? Int
+        let likes = dict["likes_count"] as? Int
+        let genre = dict["genre"] as? String
+
+        var progressive: String?
+        var hls: String?
+        if let media = dict["media"] as? [String: Any],
+           let transcodings = media["transcodings"] as? [[String: Any]] {
+            for tr in transcodings {
+                guard let u = tr["url"] as? String,
+                      let fmt = tr["format"] as? [String: Any],
+                      let proto = fmt["protocol"] as? String else { continue }
+                let preset = (tr["preset"] as? String) ?? ""
+                if preset.contains("preview") { continue }
+                if proto == "progressive" { progressive = u }
+                else if proto == "hls" && hls == nil { hls = u }
+            }
+        }
+
+        return Track(
+            scId: scId,
+            url: permalink,
+            title: title,
+            artist: artist,
+            artistId: artistId,
+            artistAvatar: artistAvatar,
+            artwork: artwork,
+            durationMs: dur > 0 ? dur : nil,
+            playbackCount: plays,
+            likesCount: likes,
+            genre: genre,
+            streamUrl: progressive,
+            hlsUrl: hls
+        )
     }
 
-    // MARK: Track Search (without official API)
+    static func parsePlaylist(_ dict: [String: Any]) -> SCPlaylist? {
+        guard let id = dict["id"] as? Int,
+              let title = dict["title"] as? String,
+              let permalink = dict["permalink_url"] as? String else { return nil }
+        let user = dict["user"] as? [String: Any]
+        let author = user?["username"] as? String ?? "SoundCloud"
+        let rawTracks = (dict["tracks"] as? [[String: Any]]) ?? []
+        let parsedTracks = rawTracks.compactMap(Self.parseTrack)
+        let artwork = (dict["artwork_url"] as? String)
+            ?? parsedTracks.first?.artwork
+            ?? (user?["avatar_url"] as? String)
+        let count = (dict["track_count"] as? Int) ?? parsedTracks.count
+        return SCPlaylist(
+            id: id,
+            title: title,
+            author: author,
+            artwork: artwork,
+            trackCount: count,
+            permalinkUrl: permalink,
+            tracks: parsedTracks
+        )
+    }
+
+    static func parseUser(_ dict: [String: Any]) -> SCUser? {
+        guard let id = dict["id"] as? Int,
+              let username = dict["username"] as? String else { return nil }
+        return SCUser(
+            id: id,
+            username: username,
+            avatarUrl: dict["avatar_url"] as? String,
+            permalinkUrl: dict["permalink_url"] as? String ?? "https://soundcloud.com",
+            followersCount: dict["followers_count"] as? Int,
+            trackCount: dict["track_count"] as? Int,
+            likesCount: dict["likes_count"] as? Int
+        )
+    }
+
+    // MARK: Home & Recommendations (SoundCloud-style Feed)
+    func loadHome(genre: String? = nil) async {
+        let g = genre ?? selectedGenre
+        await MainActor.run {
+            self.selectedGenre = g
+            self.isLoadingHome = true
+        }
+        defer { Task { @MainActor in self.isLoadingHome = false } }
+
+        // 1. Personalized "For You" based on account likes, local likes, or recent plays
+        var seeds: [Int] = []
+        seeds.append(contentsOf: accountTracks.prefix(4).compactMap(\.scId))
+        seeds.append(contentsOf: recentTracks.prefix(3).compactMap(\.scId))
+        seeds.append(contentsOf: likedTracks.prefix(3).compactMap(\.scId))
+
+        if let firstSeed = seeds.first {
+            if let relJson = try? await apiGet("/tracks/\(firstSeed)/related", query: [URLQueryItem(name: "limit", value: "25")]),
+               let relRoot = relJson as? [String: Any],
+               let relColl = relRoot["collection"] as? [[String: Any]] {
+                let relParsed = relColl.compactMap(Self.parseTrack)
+                if !relParsed.isEmpty {
+                    await MainActor.run { self.forYouTracks = relParsed }
+                }
+            }
+        }
+
+        if seeds.count > 1, let secondSeed = seeds.dropFirst().first {
+            if let rel2Json = try? await apiGet("/tracks/\(secondSeed)/related", query: [URLQueryItem(name: "limit", value: "20")]),
+               let rel2Root = rel2Json as? [String: Any],
+               let rel2Coll = rel2Root["collection"] as? [[String: Any]] {
+                let rel2Parsed = rel2Coll.compactMap(Self.parseTrack)
+                if !rel2Parsed.isEmpty {
+                    await MainActor.run { self.relatedToRecentTracks = rel2Parsed }
+                }
+            }
+        }
+
+        // 2. Genre Trending / Banger Tracks
+        if let json = try? await apiGet("/search/tracks", query: [
+            URLQueryItem(name: "q", value: "\(g)热门 OR \(g)"),
+            URLQueryItem(name: "limit", value: "35")
+        ]) {
+            if let root = json as? [String: Any],
+               let coll = root["collection"] as? [[String: Any]] {
+                var parsed = coll.compactMap(Self.parseTrack)
+                parsed.sort { ($0.playbackCount ?? 0) > ($1.playbackCount ?? 0) }
+                await MainActor.run {
+                    self.trendingTracks = parsed
+                    if self.forYouTracks.isEmpty {
+                        self.forYouTracks = Array(parsed.shuffled().prefix(15))
+                    }
+                }
+            }
+        }
+
+        // 3. Curated Playlists for selected genre
+        if let plJson = try? await apiGet("/search/playlists", query: [
+            URLQueryItem(name: "q", value: "\(g) mix"),
+            URLQueryItem(name: "limit", value: "10")
+        ]),
+           let plRoot = plJson as? [String: Any],
+           let plColl = plRoot["collection"] as? [[String: Any]] {
+            let pls = plColl.compactMap(Self.parsePlaylist)
+            await MainActor.run { self.featuredPlaylists = pls }
+        }
+    }
+
+    /// Launches non-stop "My Wave" radio seeded from account likes, recents, or trending
+    func startMyWave() {
+        var pool: [Track] = []
+        pool.append(contentsOf: forYouTracks)
+        pool.append(contentsOf: accountTracks)
+        pool.append(contentsOf: likedTracks)
+        pool.append(contentsOf: trendingTracks)
+        var unique: [Track] = []
+        var seen = Set<String>()
+        for t in pool.shuffled() where !seen.contains(t.url) {
+            seen.insert(t.url)
+            unique.append(t)
+        }
+        guard !unique.isEmpty else { return }
+        autoRadio = true
+        playQueue(unique, startIndex: 0)
+    }
+
+    /// Starts radio based on a specific track
+    func startTrackRadio(_ seed: Track) async {
+        guard let scId = seed.scId else {
+            await MainActor.run { playQueue([seed], startIndex: 0) }
+            return
+        }
+        do {
+            let json = try await apiGet("/tracks/\(scId)/related", query: [URLQueryItem(name: "limit", value: "30")])
+            if let root = json as? [String: Any],
+               let coll = root["collection"] as? [[String: Any]] {
+                let related = coll.compactMap(Self.parseTrack)
+                await MainActor.run {
+                    self.playQueue([seed] + related, startIndex: 0)
+                }
+            }
+        } catch {
+            await MainActor.run { playQueue([seed], startIndex: 0) }
+        }
+    }
+
+    // MARK: Search (Tracks, Playlists, Artists)
     func search(query raw: String) async {
         let q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else {
-            await MainActor.run { searchResults = [] }
+            await MainActor.run {
+                searchResults = []
+                searchPlaylists = []
+                searchUsers = []
+            }
             return
         }
         if q.contains("soundcloud.com/") {
@@ -189,49 +455,78 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         await MainActor.run { isSearching = true }
         defer { Task { @MainActor in isSearching = false } }
 
-        do {
-            let json = try await apiGet("/search/tracks", query: [
+        async let tracksTask: Void = {
+            if let json = try? await self.apiGet("/search/tracks", query: [
                 URLQueryItem(name: "q", value: q),
-                URLQueryItem(name: "limit", value: "30")
-            ])
-            if let root = json as? [String: Any],
+                URLQueryItem(name: "limit", value: "35")
+            ]),
+               let root = json as? [String: Any],
                let coll = root["collection"] as? [[String: Any]] {
                 let parsed = coll.compactMap(Self.parseTrack)
                 await MainActor.run { self.searchResults = parsed }
-                return
             }
-        } catch {
-            // Fallback to HTML hydration scrape if api-v2 fails
-            if let fallback = try? await scrapeHydrationSearch(query: q), !fallback.isEmpty {
-                await MainActor.run { self.searchResults = fallback }
-                return
+        }()
+
+        async let playlistsTask: Void = {
+            if let json = try? await self.apiGet("/search/playlists", query: [
+                URLQueryItem(name: "q", value: q),
+                URLQueryItem(name: "limit", value: "15")
+            ]),
+               let root = json as? [String: Any],
+               let coll = root["collection"] as? [[String: Any]] {
+                let parsed = coll.compactMap(Self.parsePlaylist)
+                await MainActor.run { self.searchPlaylists = parsed }
             }
-            await MainActor.run { self.errorText = "Ошибка поиска: \(error.localizedDescription)" }
-        }
+        }()
+
+        async let usersTask: Void = {
+            if let json = try? await self.apiGet("/search/users", query: [
+                URLQueryItem(name: "q", value: q),
+                URLQueryItem(name: "limit", value: "15")
+            ]),
+               let root = json as? [String: Any],
+               let coll = root["collection"] as? [[String: Any]] {
+                let parsed = coll.compactMap(Self.parseUser)
+                await MainActor.run { self.searchUsers = parsed }
+            }
+        }()
+
+        _ = await (tracksTask, playlistsTask, usersTask)
     }
 
-    private func scrapeHydrationSearch(query: String) async throws -> [Track] {
-        var comps = URLComponents(string: "https://soundcloud.com/search/sounds")!
-        comps.queryItems = [URLQueryItem(name: "q", value: query)]
-        var req = URLRequest(url: comps.url!)
-        req.setValue(desktopUA, forHTTPHeaderField: "User-Agent")
-        let (data, _) = try await URLSession.shared.data(for: req)
-        let html = String(data: data, encoding: .utf8) ?? ""
-        guard let start = html.range(of: "window.__sc_hydration = "),
-              let end = html.range(of: ";</script>", range: start.upperBound..<html.endIndex) else { return [] }
-        let rawJson = String(html[start.upperBound..<end.lowerBound])
-        guard let jData = rawJson.data(using: .utf8),
-              let arr = try JSONSerialization.jsonObject(with: jData) as? [[String: Any]] else { return [] }
-        for item in arr where (item["hydratable"] as? String) == "search" {
-            if let d = item["data"] as? [String: Any],
-               let coll = d["collection"] as? [[String: Any]] {
-                return coll.compactMap(Self.parseTrack)
-            }
-        }
-        return []
+    func fetchArtistTracks(userId: Int) async -> [Track] {
+        guard let json = try? await apiGet("/users/\(userId)/tracks", query: [URLQueryItem(name: "limit", value: "40")]),
+              let root = json as? [String: Any],
+              let coll = root["collection"] as? [[String: Any]] else { return [] }
+        return coll.compactMap(Self.parseTrack)
     }
 
-    // MARK: Account Login (Web Cookie / OAuth Token & Profile Resolve)
+    func fetchPlaylistFull(_ playlist: SCPlaylist) async -> [Track] {
+        if !playlist.tracks.isEmpty && playlist.tracks.count >= min(playlist.trackCount, 5) {
+            return playlist.tracks
+        }
+        guard let json = try? await apiGet("/playlists/\(playlist.id)"),
+              let dict = json as? [String: Any],
+              let rawTracks = dict["tracks"] as? [[String: Any]] else {
+            return playlist.tracks
+        }
+        let direct = rawTracks.compactMap(Self.parseTrack)
+        // SoundCloud sometimes returns stub tracks with only `id` for large playlists; resolve batch of IDs
+        let missingIds = rawTracks.compactMap { item -> Int? in
+            if item["title"] == nil, let id = item["id"] as? Int { return id }
+            return nil
+        }.prefix(35)
+        if !missingIds.isEmpty {
+            let idsParam = missingIds.map(String.init).joined(separator: ",")
+            if let extraJson = try? await apiGet("/tracks", query: [URLQueryItem(name: "ids", value: idsParam)]),
+               let extraArr = extraJson as? [[String: Any]] {
+                return direct + extraArr.compactMap(Self.parseTrack)
+            }
+        }
+        return direct
+    }
+
+    // MARK: Account Login & Sync
     func handleCapturedAuth(token: String?, clientId: String?) {
         if let cid = clientId, !cid.isEmpty { updateClientId(cid) }
         guard let token = token, !token.isEmpty else { return }
@@ -248,17 +543,10 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         defer { Task { @MainActor in isLoadingAccount = false } }
         do {
             let json = try await apiGet("/me")
-            if let dict = json as? [String: Any],
-               let id = dict["id"] as? Int,
-               let username = dict["username"] as? String {
-                let user = SCUser(
-                    id: id,
-                    username: username,
-                    avatarUrl: dict["avatar_url"] as? String,
-                    permalinkUrl: dict["permalink_url"] as? String ?? "https://soundcloud.com"
-                )
+            if let dict = json as? [String: Any], let user = Self.parseUser(dict) {
                 await MainActor.run { self.currentUser = user }
-                await fetchAccountLikes()
+                await fetchAccountData()
+                await loadHome(genre: selectedGenre)
             }
         } catch {
             await MainActor.run { self.errorText = "Не удалось загрузить профиль" }
@@ -275,17 +563,10 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
 
         do {
             let json = try await apiGet("/resolve", query: [URLQueryItem(name: "url", value: urlStr)])
-            if let dict = json as? [String: Any],
-               let id = dict["id"] as? Int,
-               let username = dict["username"] as? String {
-                let user = SCUser(
-                    id: id,
-                    username: username,
-                    avatarUrl: dict["avatar_url"] as? String,
-                    permalinkUrl: dict["permalink_url"] as? String ?? urlStr
-                )
+            if let dict = json as? [String: Any], let user = Self.parseUser(dict) {
                 await MainActor.run { self.currentUser = user }
-                await fetchAccountLikes()
+                await fetchAccountData()
+                await loadHome(genre: selectedGenre)
             } else {
                 await MainActor.run { self.errorText = "Профиль не найден" }
             }
@@ -294,37 +575,46 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         }
     }
 
-    func fetchAccountLikes() async {
+    func fetchAccountData() async {
         guard let uid = currentUser?.id else { return }
         await MainActor.run { isLoadingAccount = true }
         defer { Task { @MainActor in isLoadingAccount = false } }
-        do {
-            let json = try await apiGet("/users/\(uid)/track_likes", query: [
-                URLQueryItem(name: "limit", value: "50")
-            ])
-            if let root = json as? [String: Any],
-               let coll = root["collection"] as? [[String: Any]] {
-                let liked = coll.compactMap { item -> Track? in
-                    if let t = item["track"] as? [String: Any] { return Self.parseTrack(t) }
-                    return Self.parseTrack(item)
-                }
-                await MainActor.run { self.accountTracks = liked }
-            }
-        } catch {
-            await MainActor.run { self.errorText = "Не удалось загрузить лайки" }
-        }
-    }
 
-    func importAllAccountTracks() {
-        for t in accountTracks where !tracks.contains(where: { $0.url == t.url }) {
-            tracks.append(t)
+        // 1. User liked tracks
+        if let json = try? await apiGet("/users/\(uid)/track_likes", query: [URLQueryItem(name: "limit", value: "80")]),
+           let root = json as? [String: Any],
+           let coll = root["collection"] as? [[String: Any]] {
+            let liked = coll.compactMap { item -> Track? in
+                if let t = item["track"] as? [String: Any] { return Self.parseTrack(t) }
+                return Self.parseTrack(item)
+            }
+            await MainActor.run { self.accountTracks = liked }
         }
+
+        // 2. User playlists & liked playlists
+        var allPlaylists: [SCPlaylist] = []
+        if let plJson = try? await apiGet("/users/\(uid)/playlists", query: [URLQueryItem(name: "limit", value: "25")]),
+           let plRoot = plJson as? [String: Any],
+           let plColl = plRoot["collection"] as? [[String: Any]] {
+            allPlaylists.append(contentsOf: plColl.compactMap(Self.parsePlaylist))
+        }
+        if let lplJson = try? await apiGet("/users/\(uid)/playlist_likes", query: [URLQueryItem(name: "limit", value: "25")]),
+           let lplRoot = lplJson as? [String: Any],
+           let lplColl = lplRoot["collection"] as? [[String: Any]] {
+            let parsed = lplColl.compactMap { item -> SCPlaylist? in
+                if let p = item["playlist"] as? [String: Any] { return Self.parsePlaylist(p) }
+                return Self.parsePlaylist(item)
+            }
+            allPlaylists.append(contentsOf: parsed)
+        }
+        await MainActor.run { self.accountPlaylists = allPlaylists }
     }
 
     func logout() {
         oauthToken = nil
         currentUser = nil
         accountTracks = []
+        accountPlaylists = []
         let store = WKWebsiteDataStore.default()
         store.httpCookieStore.getAllCookies { cookies in
             for c in cookies where c.domain.contains("soundcloud") {
@@ -333,18 +623,17 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         }
     }
 
-    // MARK: Library
-    func addTrack(_ t: Track, playImmediately: Bool = false) {
-        if let existing = tracks.firstIndex(where: { $0.url == t.url }) {
-            if playImmediately { play(index: existing) }
-            return
+    // MARK: Likes & Links
+    func toggleLike(_ t: Track) {
+        if let idx = likedTracks.firstIndex(where: { $0.url == t.url }) {
+            likedTracks.remove(at: idx)
+        } else {
+            likedTracks.insert(t, at: 0)
         }
-        tracks.insert(t, at: 0)
-        if playImmediately { play(index: 0) }
     }
 
-    func isSaved(_ t: Track) -> Bool {
-        tracks.contains(where: { $0.url == t.url })
+    func isLiked(_ t: Track) -> Bool {
+        likedTracks.contains(where: { $0.url == t.url }) || accountTracks.contains(where: { $0.url == t.url })
     }
 
     func add(link raw: String) async {
@@ -353,92 +642,225 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             await MainActor.run { errorText = "Это не ссылка SoundCloud" }
             return
         }
-        // Try resolve first (supports tracks and playlists!)
         if let json = try? await apiGet("/resolve", query: [URLQueryItem(name: "url", value: link)]),
            let dict = json as? [String: Any] {
             if let kind = dict["kind"] as? String, kind == "playlist",
-               let rawTracks = dict["tracks"] as? [[String: Any]] {
-                let parsed = rawTracks.compactMap(Self.parseTrack)
-                if !parsed.isEmpty {
+               let pl = Self.parsePlaylist(dict) {
+                let tracks = await fetchPlaylistFull(pl)
+                if !tracks.isEmpty {
                     await MainActor.run {
-                        for t in parsed where !self.tracks.contains(where: { $0.url == t.url }) {
-                            self.tracks.append(t)
-                        }
+                        self.playQueue(tracks, startIndex: 0)
                         self.errorText = nil
                     }
                     return
                 }
             } else if let single = Self.parseTrack(dict) {
                 await MainActor.run {
-                    self.addTrack(single)
+                    if !self.likedTracks.contains(where: { $0.url == single.url }) {
+                        self.likedTracks.insert(single, at: 0)
+                    }
+                    self.playQueue([single] + self.queue, startIndex: 0)
                     self.errorText = nil
                 }
                 return
             }
         }
+        await MainActor.run { errorText = "Не удалось открыть ссылку" }
+    }
 
-        // Fallback to oembed
-        guard var comps = URLComponents(string: "https://soundcloud.com/oembed") else { return }
-        comps.queryItems = [.init(name: "format", value: "json"), .init(name: "url", value: link)]
-        do {
-            let (data, _) = try await URLSession.shared.data(from: comps.url!)
-            let o = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-            let t = Track(url: link,
-                          title: o["title"] as? String ?? link,
-                          artist: o["author_name"] as? String ?? "",
-                          artwork: o["thumbnail_url"] as? String)
-            await MainActor.run { addTrack(t); errorText = nil }
-        } catch {
-            await MainActor.run { errorText = "Не удалось добавить ссылку" }
+    // MARK: Playback & Native Streaming
+    func playQueue(_ list: [Track], startIndex: Int = 0) {
+        guard !list.isEmpty, list.indices.contains(startIndex) else { return }
+        queue = list
+        play(index: startIndex)
+    }
+
+    func play(index: Int) {
+        guard queue.indices.contains(index) else { return }
+        currentIndex = index
+        position = 0
+        let t = queue[index]
+        duration = Double(t.durationMs ?? 0) / 1000.0
+
+        // Record in recent history
+        recentTracks.removeAll { $0.url == t.url }
+        recentTracks.insert(t, at: 0)
+        if recentTracks.count > 40 { recentTracks = Array(recentTracks.prefix(40)) }
+
+        loadArtwork(t.artwork)
+        isPlaying = true
+        updateNowPlaying()
+
+        // Try direct native AVPlayer streaming first for instant start & speed/pitch controls
+        Task {
+            if let directURL = await resolveStreamURL(for: t) {
+                await MainActor.run {
+                    self.usingNativePlayer = true
+                    self.js("if(w) w.pause();")
+                    let item = AVPlayerItem(url: directURL)
+                    item.audioTimePitchAlgorithm = self.pitchShift ? .varispeed : .timeDomain
+                    self.avPlayer.replaceCurrentItem(with: item)
+                    self.avPlayer.play()
+                    self.avPlayer.rate = Float(self.speed.rawValue)
+                }
+            } else {
+                await MainActor.run {
+                    self.usingNativePlayer = false
+                    self.avPlayer.pause()
+                    self.js("loadTrack(\(Self.q(t.url)))")
+                }
+            }
+        }
+
+        // If near end of queue and autoRadio is enabled, prefetch related tracks
+        if autoRadio && index >= queue.count - 2, let scId = t.scId {
+            Task { await appendAutoRadio(seedId: scId) }
         }
     }
 
-    func remove(at offsets: IndexSet) {
-        let playing = current?.id
-        tracks.remove(atOffsets: offsets)
-        currentIndex = tracks.firstIndex { $0.id == playing }
+    private func resolveStreamURL(for track: Track) async -> URL? {
+        var transcodingEndpoint = track.streamUrl ?? track.hlsUrl
+        if transcodingEndpoint == nil {
+            if let json = try? await apiGet("/resolve", query: [URLQueryItem(name: "url", value: track.url)]),
+               let dict = json as? [String: Any],
+               let resolved = Self.parseTrack(dict) {
+                transcodingEndpoint = resolved.streamUrl ?? resolved.hlsUrl
+            }
+        }
+        guard let endpoint = transcodingEndpoint else { return nil }
+        if let json = try? await apiGet(endpoint),
+           let dict = json as? [String: Any],
+           let urlStr = dict["url"] as? String,
+           let u = URL(string: urlStr) {
+            return u
+        }
+        return nil
     }
 
-    // MARK: Playback
-    func play(index: Int) {
-        guard tracks.indices.contains(index) else { return }
-        currentIndex = index
-        position = 0; duration = 0
-        let t = tracks[index]
-        loadArtwork(t.artwork)
-        js("loadTrack(\(Self.q(t.url)))")
-        isPlaying = true
-        updateNowPlaying()
+    private func appendAutoRadio(seedId: Int) async {
+        guard let json = try? await apiGet("/tracks/\(seedId)/related", query: [URLQueryItem(name: "limit", value: "15")]),
+              let root = json as? [String: Any],
+              let coll = root["collection"] as? [[String: Any]] else { return }
+        let related = coll.compactMap(Self.parseTrack)
+        await MainActor.run {
+            for r in related where !self.queue.contains(where: { $0.url == r.url }) {
+                self.queue.append(r)
+            }
+        }
     }
 
     func toggle() {
-        if current == nil { if !tracks.isEmpty { play(index: 0) }; return }
-        js(isPlaying ? "w.pause()" : "w.play()")
+        if current == nil {
+            if !queue.isEmpty { play(index: 0) }
+            else if !forYouTracks.isEmpty { playQueue(forYouTracks, startIndex: 0) }
+            return
+        }
+        if usingNativePlayer {
+            if isPlaying {
+                avPlayer.pause()
+                isPlaying = false
+            } else {
+                avPlayer.play()
+                avPlayer.rate = Float(speed.rawValue)
+                isPlaying = true
+            }
+            updateNowPlaying()
+        } else {
+            js(isPlaying ? "w.pause()" : "w.play()")
+        }
     }
 
     func next(auto: Bool = false) {
-        guard !tracks.isEmpty else { return }
+        guard !queue.isEmpty else { return }
         if auto && repeatMode == .one, let i = currentIndex { play(index: i); return }
-        if shuffle { play(index: Int.random(in: 0..<tracks.count)); return }
+        if shuffle && queue.count > 1 { play(index: Int.random(in: 0..<queue.count)); return }
         let n = (currentIndex ?? -1) + 1
-        if n < tracks.count { play(index: n) }
+        if n < queue.count { play(index: n) }
         else if repeatMode == .all || !auto { play(index: 0) }
         else { isPlaying = false; updateNowPlaying() }
     }
 
     func previous() {
         if position > 3 { seek(0); return }
-        guard !tracks.isEmpty else { return }
+        guard !queue.isEmpty else { return }
         play(index: max(0, (currentIndex ?? 0) - 1))
     }
 
-    func seek(_ s: Double) { position = s; js("w.seekTo(\(Int(s * 1000)))"); updateNowPlaying() }
+    func seek(_ s: Double) {
+        position = s
+        if usingNativePlayer {
+            avPlayer.seek(to: CMTime(seconds: s, preferredTimescale: 600))
+        } else {
+            js("w.seekTo(\(Int(s * 1000)))")
+        }
+        updateNowPlaying()
+    }
 
     func cycleRepeat() { repeatMode = RepeatMode(rawValue: (repeatMode.rawValue + 1) % 3)! }
 
-    // MARK: Bridge
+    private func applySpeed() {
+        guard usingNativePlayer else { return }
+        avPlayer.currentItem?.audioTimePitchAlgorithm = pitchShift ? .varispeed : .timeDomain
+        if isPlaying {
+            avPlayer.rate = Float(speed.rawValue)
+        }
+        updateNowPlaying()
+    }
+
+    // MARK: Sleep Timer
+    func setSleepTimer(minutes: Int?) {
+        sleepTimer?.invalidate()
+        sleepTimer = nil
+        sleepMinutesRemaining = minutes
+        guard let minutes, minutes > 0 else { return }
+        sleepTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            if let rem = self.sleepMinutesRemaining {
+                if rem <= 1 {
+                    self.sleepMinutesRemaining = nil
+                    t.invalidate()
+                    if self.isPlaying { self.toggle() }
+                } else {
+                    self.sleepMinutesRemaining = rem - 1
+                }
+            }
+        }
+    }
+
+    // MARK: Native AVPlayer Observers
+    private func setupNativePlayer() {
+        timeObserver = avPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            guard let self, self.usingNativePlayer else { return }
+            let sec = time.seconds
+            if sec.isFinite && sec >= 0 {
+                self.position = sec
+            }
+            if let dur = self.avPlayer.currentItem?.duration.seconds, dur.isFinite && dur > 0 {
+                self.duration = dur
+            }
+            self.updateNowPlaying()
+        }
+
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self, self.usingNativePlayer,
+                  let item = note.object as? AVPlayerItem,
+                  item == self.avPlayer.currentItem else { return }
+            self.next(auto: true)
+        }
+    }
+
+    // MARK: WebView Bridge (Fallback)
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-        guard let d = m.body as? [String: Any], let type = d["type"] as? String else { return }
+        guard !usingNativePlayer,
+              let d = m.body as? [String: Any],
+              let type = d["type"] as? String else { return }
         DispatchQueue.main.async {
             switch type {
             case "play": self.isPlaying = true
@@ -469,8 +891,16 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
 
     private func setupRemote() {
         let c = MPRemoteCommandCenter.shared()
-        c.playCommand.addTarget { [weak self] _ in self?.js("w.play()"); return .success }
-        c.pauseCommand.addTarget { [weak self] _ in self?.js("w.pause()"); return .success }
+        c.playCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            if !self.isPlaying { self.toggle() }
+            return .success
+        }
+        c.pauseCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            if self.isPlaying { self.toggle() }
+            return .success
+        }
         c.togglePlayPauseCommand.addTarget { [weak self] _ in self?.toggle(); return .success }
         c.nextTrackCommand.addTarget { [weak self] _ in self?.next(); return .success }
         c.previousTrackCommand.addTarget { [weak self] _ in self?.previous(); return .success }
@@ -496,7 +926,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             MPMediaItemPropertyArtist: t.artist,
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? speed.rawValue : 0.0
         ]
         if let img = artworkImage {
             info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
@@ -533,14 +963,12 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
     """
 }
 
-/// Keeps the hidden web view inside the view hierarchy (needed for background audio).
 struct HiddenWebView: UIViewRepresentable {
     let webView: WKWebView
     func makeUIView(context: Context) -> WKWebView { webView }
     func updateUIView(_ v: WKWebView, context: Context) {}
 }
 
-/// In-app SoundCloud Web Login view that extracts `oauth_token` cookie and `Authorization` headers without API keys.
 struct SoundCloudLoginWebView: UIViewRepresentable {
     var onTokenCaptured: (String?, String?) -> Void
 
