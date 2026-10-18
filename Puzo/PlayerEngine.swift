@@ -455,43 +455,46 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         await MainActor.run { isSearching = true }
         defer { Task { @MainActor in isSearching = false } }
 
-        async let tracksTask: Void = {
-            if let json = try? await self.apiGet("/search/tracks", query: [
-                URLQueryItem(name: "q", value: q),
-                URLQueryItem(name: "limit", value: "35")
-            ]),
-               let root = json as? [String: Any],
-               let coll = root["collection"] as? [[String: Any]] {
-                let parsed = coll.compactMap(Self.parseTrack)
-                await MainActor.run { self.searchResults = parsed }
-            }
-        }()
+        async let tRes = searchTracks(q: q)
+        async let pRes = searchPlaylistsReq(q: q)
+        async let uRes = searchUsersReq(q: q)
 
-        async let playlistsTask: Void = {
-            if let json = try? await self.apiGet("/search/playlists", query: [
-                URLQueryItem(name: "q", value: q),
-                URLQueryItem(name: "limit", value: "15")
-            ]),
-               let root = json as? [String: Any],
-               let coll = root["collection"] as? [[String: Any]] {
-                let parsed = coll.compactMap(Self.parsePlaylist)
-                await MainActor.run { self.searchPlaylists = parsed }
-            }
-        }()
+        let (tracks, playlists, users) = await (tRes, pRes, uRes)
+        await MainActor.run {
+            self.searchResults = tracks
+            self.searchPlaylists = playlists
+            self.searchUsers = users
+        }
+    }
 
-        async let usersTask: Void = {
-            if let json = try? await self.apiGet("/search/users", query: [
-                URLQueryItem(name: "q", value: q),
-                URLQueryItem(name: "limit", value: "15")
-            ]),
-               let root = json as? [String: Any],
-               let coll = root["collection"] as? [[String: Any]] {
-                let parsed = coll.compactMap(Self.parseUser)
-                await MainActor.run { self.searchUsers = parsed }
-            }
-        }()
+    private func searchTracks(q: String) async -> [Track] {
+        guard let json = try? await apiGet("/search/tracks", query: [
+            URLQueryItem(name: "q", value: q),
+            URLQueryItem(name: "limit", value: "35")
+        ]),
+        let root = json as? [String: Any],
+        let coll = root["collection"] as? [[String: Any]] else { return [] }
+        return coll.compactMap(Self.parseTrack)
+    }
 
-        _ = await (tracksTask, playlistsTask, usersTask)
+    private func searchPlaylistsReq(q: String) async -> [SCPlaylist] {
+        guard let json = try? await apiGet("/search/playlists", query: [
+            URLQueryItem(name: "q", value: q),
+            URLQueryItem(name: "limit", value: "15")
+        ]),
+        let root = json as? [String: Any],
+        let coll = root["collection"] as? [[String: Any]] else { return [] }
+        return coll.compactMap(Self.parsePlaylist)
+    }
+
+    private func searchUsersReq(q: String) async -> [SCUser] {
+        guard let json = try? await apiGet("/search/users", query: [
+            URLQueryItem(name: "q", value: q),
+            URLQueryItem(name: "limit", value: "15")
+        ]),
+        let root = json as? [String: Any],
+        let coll = root["collection"] as? [[String: Any]] else { return [] }
+        return coll.compactMap(Self.parseUser)
     }
 
     func fetchArtistTracks(userId: Int) async -> [Track] {

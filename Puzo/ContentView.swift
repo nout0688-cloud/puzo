@@ -407,34 +407,25 @@ struct ContentView: View {
                                     .padding(.horizontal)
 
                                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                                    ForEach([
-                                        ("Brazilian Phonk", "bolt.fill", Color.orange),
-                                        ("Slowed + Reverb", "moon.stars.fill", Color.purple),
-                                        ("Nightcore / Sped Up", "sparkles", Color.pink),
-                                        ("Dark Trap / Opium", "flame.fill", Color.red),
-                                        ("Hyperpop / Glitch", "waveform.path.ecg", Color.cyan),
-                                        ("Russian Rap / Underground", "headphones", Color.blue),
-                                        ("Lo-Fi Chill", "cup.and.saucer.fill", Color.mint),
-                                        ("Hard Techno / Rave", "speaker.wave.3.fill", Color.yellow)
-                                    ], id: \.0) { title, icon, color in
+                                    ForEach(VibePreset.all) { item in
                                         Button {
-                                            query = title
-                                            Task { await p.search(query: title) }
+                                            query = item.title
+                                            Task { await p.search(query: item.title) }
                                         } label: {
                                             HStack(spacing: 10) {
-                                                Image(systemName: icon)
-                                                    .foregroundStyle(color)
-                                                Text(title)
+                                                Image(systemName: item.icon)
+                                                    .foregroundStyle(item.color)
+                                                Text(item.title)
                                                     .font(.subheadline.bold())
                                                     .foregroundStyle(.white)
                                                     .lineLimit(1)
                                                 Spacer()
                                             }
                                             .padding(14)
-                                            .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: 14))
+                                            .background(item.color.opacity(0.16), in: RoundedRectangle(cornerRadius: 14))
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 14)
-                                                    .stroke(color.opacity(0.35), lineWidth: 1)
+                                                    .stroke(item.color.opacity(0.35), lineWidth: 1)
                                             )
                                         }
                                         .buttonStyle(.plain)
@@ -851,6 +842,24 @@ struct ContentView: View {
 }
 
 // MARK: - Reusable Cards & Rows
+
+struct VibePreset: Identifiable {
+    var id: String { title }
+    let title: String
+    let icon: String
+    let color: Color
+
+    static let all: [VibePreset] = [
+        VibePreset(title: "Brazilian Phonk", icon: "bolt.fill", color: .orange),
+        VibePreset(title: "Slowed + Reverb", icon: "moon.stars.fill", color: .purple),
+        VibePreset(title: "Nightcore / Sped Up", icon: "sparkles", color: .pink),
+        VibePreset(title: "Dark Trap / Opium", icon: "flame.fill", color: .red),
+        VibePreset(title: "Hyperpop / Glitch", icon: "waveform.path.ecg", color: .cyan),
+        VibePreset(title: "Russian Rap", icon: "headphones", color: .blue),
+        VibePreset(title: "Lo-Fi Chill", icon: "cup.and.saucer.fill", color: .mint),
+        VibePreset(title: "Hard Techno / Rave", icon: "speaker.wave.3.fill", color: .yellow)
+    ]
+}
 
 struct SectionHeader: View {
     let title: String
