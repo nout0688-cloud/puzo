@@ -1341,200 +1341,324 @@ struct NowPlayingView: View {
     @Environment(\.dismiss) var dismiss
     @State private var scrub: Double?
     @State private var showQueue = false
+    @State private var dragOffset: CGFloat = 0
+
+    private var effectiveDuration: Double {
+        if p.duration > 1 { return p.duration }
+        if let ms = p.current?.durationMs, ms > 0 { return Double(ms) / 1000.0 }
+        return 180
+    }
+
+    private var currentPos: Double {
+        min(max(scrub ?? p.position, 0), effectiveDuration)
+    }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            Cover(url: p.current?.artwork)
-                .scaledToFill()
-                .blur(radius: 75)
-                .opacity(0.55)
-                .ignoresSafeArea()
-
-            VStack(spacing: 18) {
-                // Top Bar
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.title3.bold())
-                            .padding(10)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    Spacer()
-                    VStack(spacing: 2) {
-                        Text(p.autoRadio ? "АВТОВОЛНА ВКЛ" : "СЕЙЧАС ИГРАЕТ")
-                            .font(.caption2.weight(.heavy))
-                            .tracking(1.2)
-                            .foregroundStyle(.orange)
-                        if let mins = p.sleepMinutesRemaining {
-                            Text("Сон через \(mins) мин")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    Menu {
-                        Section("Таймер сна") {
-                            Button("Выключить таймер") { p.setSleepTimer(minutes: nil) }
-                            Button("Через 15 минут") { p.setSleepTimer(minutes: 15) }
-                            Button("Через 30 минут") { p.setSleepTimer(minutes: 30) }
-                            Button("Через 60 минут") { p.setSleepTimer(minutes: 60) }
-                        }
-                        Section("Режим волны") {
-                            Toggle("Бесконечная автоволна", isOn: $p.autoRadio)
-                            Toggle("Изменять тон (Pitch) со скоростью", isOn: $p.pitchShift)
-                        }
-                        if let t = p.current {
-                            Button {
-                                UIPasteboard.general.string = t.url
-                            } label: {
-                                Label("Скопировать ссылку", systemImage: "doc.on.doc")
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.title3.bold())
-                            .padding(10)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 24)
-                .padding(.top, 8)
-
-                Spacer()
-
-                // Animated Album Artwork
+        GeometryReader { screen in
+            ZStack {
+                // Constrained blurred background so it NEVER expands layout width beyond screen.size.width
+                Color.black.ignoresSafeArea()
                 Cover(url: p.current?.artwork)
-                    .aspectRatio(1, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 24))
-                    .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.15), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.6), radius: 30, y: 12)
-                    .scaleEffect(p.isPlaying ? 1.0 : 0.88)
-                    .animation(.spring(response: 0.4, dampingFraction: 0.7), value: p.isPlaying)
-                    .padding(.horizontal, 32)
+                    .frame(width: screen.size.width, height: screen.size.height)
+                    .blur(radius: 70)
+                    .opacity(0.5)
+                    .overlay(
+                        LinearGradient(
+                            colors: [.black.opacity(0.35), .black.opacity(0.65), .black.opacity(0.92)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .clipped()
+                    .ignoresSafeArea()
 
-                // Title & Like Row
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(p.current?.title ?? "")
-                            .font(.title3.bold())
-                            .foregroundStyle(.white)
-                            .lineLimit(2)
-                        Text(p.current?.artist ?? "")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    if let t = p.current {
-                        Button { p.toggleLike(t) } label: {
-                            Image(systemName: p.isLiked(t) ? "heart.fill" : "heart")
-                                .font(.title2)
-                                .foregroundStyle(p.isLiked(t) ? .orange : .white)
-                                .padding(10)
-                                .background(.ultraThinMaterial, in: Circle())
-                        }
-                    }
-                }
-                .padding(.horizontal, 28)
+                VStack(spacing: 14) {
+                    // Drag indicator capsule
+                    Capsule()
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: 42, height: 5)
+                        .padding(.top, 8)
+                        .onTapGesture { dismiss() }
 
-                // Vibe Speed Selector (Slowed / Normal / Nightcore)
-                HStack(spacing: 8) {
-                    ForEach(PlaybackSpeed.allCases) { mode in
-                        Button {
-                            p.speed = mode
-                        } label: {
-                            Text(mode.label)
-                                .font(.caption.bold())
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(
-                                    p.speed == mode ? Color.orange : Color.white.opacity(0.1),
-                                    in: Capsule()
-                                )
-                                .foregroundStyle(p.speed == mode ? .black : .white)
-                        }
-                    }
-                }
-
-                // Scrubber
-                VStack(spacing: 4) {
-                    Slider(
-                        value: Binding(get: { scrub ?? p.position }, set: { scrub = $0 }),
-                        in: 0...max(p.duration, 1)
-                    ) { editing in
-                        if !editing, let s = scrub { p.seek(s); scrub = nil }
-                    }
-                    .tint(.orange)
-
+                    // Top Bar with explicit "Назад" button
                     HStack {
-                        Text(fmt(scrub ?? p.position))
-                        Spacer()
-                        Text(fmt(p.duration))
-                    }
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 28)
-
-                // Main Transport Controls
-                HStack(spacing: 32) {
-                    Button { p.shuffle.toggle() } label: {
-                        Image(systemName: "shuffle")
-                            .foregroundStyle(p.shuffle ? Color.orange : .white.opacity(0.7))
-                    }
-                    Button { p.previous() } label: {
-                        Image(systemName: "backward.fill").font(.title)
-                    }
-                    Button { p.toggle() } label: {
-                        ZStack {
-                            Circle()
-                                .fill(LinearGradient(colors: [.orange, .red], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                .frame(width: 74, height: 74)
-                                .shadow(color: .orange.opacity(0.45), radius: 14)
-                            Image(systemName: p.isPlaying ? "pause.fill" : "play.fill")
-                                .font(.title.bold())
-                                .foregroundStyle(.black)
-                        }
-                    }
-                    Button { p.next() } label: {
-                        Image(systemName: "forward.fill").font(.title)
-                    }
-                    Button { p.cycleRepeat() } label: {
-                        Image(systemName: p.repeatMode == .one ? "repeat.1" : "repeat")
-                            .foregroundStyle(p.repeatMode == .off ? Color.white.opacity(0.7) : .orange)
-                    }
-                }
-                .foregroundStyle(.white)
-                .font(.title3)
-
-                // Bottom Utility Bar (Track Radio & Queue)
-                HStack(spacing: 20) {
-                    if let t = p.current {
                         Button {
-                            Task { await p.startTrackRadio(t) }
+                            dismiss()
                         } label: {
-                            Label("Похожие (Волна)", systemImage: "dot.radiowaves.left.and.right")
-                                .font(.caption.bold())
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                    }
-
-                    Button {
-                        showQueue = true
-                    } label: {
-                        Label("Очередь (\(p.queue.count))", systemImage: "list.bullet")
-                            .font(.caption.bold())
+                            HStack(spacing: 5) {
+                                Image(systemName: "chevron.down")
+                                    .font(.subheadline.bold())
+                                Text("Назад")
+                                    .font(.subheadline.bold())
+                            }
+                            .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .background(.ultraThinMaterial, in: Capsule())
+                        }
+
+                        Spacer()
+
+                        VStack(spacing: 2) {
+                            Text(p.autoRadio ? "АВТОВОЛНА ВКЛ" : "СЕЙЧАС ИГРАЕТ")
+                                .font(.caption2.weight(.heavy))
+                                .tracking(1.1)
+                                .foregroundStyle(.orange)
+                            if let mins = p.sleepMinutesRemaining {
+                                Text("Сон через \(mins) мин")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Spacer()
+
+                        Menu {
+                            Section("Таймер сна") {
+                                Button("Выключить таймер") { p.setSleepTimer(minutes: nil) }
+                                Button("Через 15 минут") { p.setSleepTimer(minutes: 15) }
+                                Button("Через 30 минут") { p.setSleepTimer(minutes: 30) }
+                                Button("Через 60 минут") { p.setSleepTimer(minutes: 60) }
+                            }
+                            Section("Режим волны") {
+                                Toggle("Бесконечная автоволна", isOn: $p.autoRadio)
+                                Toggle("Изменять тон (Pitch) со скоростью", isOn: $p.pitchShift)
+                            }
+                            if let t = p.current {
+                                Button {
+                                    UIPasteboard.general.string = t.url
+                                } label: {
+                                    Label("Скопировать ссылку", systemImage: "doc.on.doc")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.white)
+                                .frame(width: 38, height: 34)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
                     }
+                    .padding(.horizontal, 20)
+
+                    Spacer(minLength: 4)
+
+                    // Album Artwork constrained to screen width
+                    let artSize = min(screen.size.width - 56, screen.size.height * 0.34)
+                    Cover(url: p.current?.artwork)
+                        .frame(width: artSize, height: artSize)
+                        .clipShape(RoundedRectangle(cornerRadius: 24))
+                        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.18), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.6), radius: 24, y: 10)
+                        .scaleEffect(p.isPlaying ? 1.0 : 0.92)
+                        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: p.isPlaying)
+
+                    Spacer(minLength: 4)
+
+                    // Track Title, Artist, Stats & Heart Button
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(p.current?.title ?? "Не выбран трек")
+                                .font(.title3.bold())
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+
+                            HStack(spacing: 8) {
+                                Text(p.current?.artist ?? "SoundCloud")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.orange)
+                                    .lineLimit(1)
+                                if let genre = p.current?.genre, !genre.isEmpty {
+                                    Text("• \(genre)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                        Spacer()
+                        if let t = p.current {
+                            Button {
+                                p.toggleLike(t)
+                            } label: {
+                                Image(systemName: p.isLiked(t) ? "heart.fill" : "heart")
+                                    .font(.title2)
+                                    .foregroundStyle(p.isLiked(t) ? .orange : .white)
+                                    .frame(width: 46, height: 46)
+                                    .background(.ultraThinMaterial, in: Circle())
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 22)
+
+                    // Vibe Speed Selector (Slowed / Normal / Nightcore)
+                    HStack(spacing: 8) {
+                        ForEach(PlaybackSpeed.allCases) { mode in
+                            Button {
+                                p.speed = mode
+                            } label: {
+                                Text(mode.label)
+                                    .font(.caption.bold())
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(
+                                        p.speed == mode ? Color.orange : Color.white.opacity(0.12),
+                                        in: Capsule()
+                                    )
+                                    .foregroundStyle(p.speed == mode ? .black : .white)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+
+                    // Interactive SoundCloud Waveform + Scrubber + Time & -10s/+10s
+                    VStack(spacing: 8) {
+                        WaveformScrubber(
+                            progress: effectiveDuration > 0 ? currentPos / effectiveDuration : 0,
+                            seed: p.current?.title.hashValue ?? 42
+                        ) { ratio in
+                            let newSec = ratio * effectiveDuration
+                            scrub = newSec
+                            p.seek(newSec)
+                            scrub = nil
+                        } onDrag: { ratio in
+                            scrub = ratio * effectiveDuration
+                        }
+                        .frame(height: 38)
+
+                        Slider(
+                            value: Binding(
+                                get: { currentPos },
+                                set: { scrub = $0 }
+                            ),
+                            in: 0...max(effectiveDuration, 1)
+                        ) { editing in
+                            if !editing, let s = scrub {
+                                p.seek(s)
+                                scrub = nil
+                            }
+                        }
+                        .tint(.orange)
+
+                        HStack {
+                            Text(fmt(currentPos))
+                                .font(.caption.monospacedDigit().bold())
+                                .foregroundStyle(.orange)
+
+                            Spacer()
+
+                            HStack(spacing: 14) {
+                                Button {
+                                    p.skip(by: -10)
+                                } label: {
+                                    Label("10с", systemImage: "gobackward.10")
+                                        .font(.caption2.bold())
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.white.opacity(0.1), in: Capsule())
+                                }
+                                Button {
+                                    p.skip(by: 10)
+                                } label: {
+                                    Label("10с", systemImage: "goforward.10")
+                                        .font(.caption2.bold())
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.white.opacity(0.1), in: Capsule())
+                                }
+                            }
+                            .foregroundStyle(.white.opacity(0.85))
+
+                            Spacer()
+
+                            Text(fmt(effectiveDuration))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 22)
+
+                    // Main Transport Controls
+                    HStack(spacing: 28) {
+                        Button { p.shuffle.toggle() } label: {
+                            Image(systemName: "shuffle")
+                                .font(.title3)
+                                .foregroundStyle(p.shuffle ? Color.orange : .white.opacity(0.7))
+                        }
+                        Button { p.previous() } label: {
+                            Image(systemName: "backward.fill")
+                                .font(.title)
+                        }
+                        Button { p.toggle() } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(LinearGradient(colors: [.orange, .red], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                    .frame(width: 72, height: 72)
+                                    .shadow(color: .orange.opacity(0.45), radius: 14)
+                                Image(systemName: p.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.title.bold())
+                                    .foregroundStyle(.black)
+                            }
+                        }
+                        Button { p.next() } label: {
+                            Image(systemName: "forward.fill")
+                                .font(.title)
+                        }
+                        Button { p.cycleRepeat() } label: {
+                            Image(systemName: p.repeatMode == .one ? "repeat.1" : "repeat")
+                                .font(.title3)
+                                .foregroundStyle(p.repeatMode == .off ? Color.white.opacity(0.7) : .orange)
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.top, 2)
+
+                    // Bottom Utility Bar (Track Radio & Queue)
+                    HStack(spacing: 14) {
+                        if let t = p.current {
+                            Button {
+                                Task { await p.startTrackRadio(t) }
+                            } label: {
+                                Label("Похожие (Волна)", systemImage: "dot.radiowaves.left.and.right")
+                                    .font(.caption.bold())
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                        }
+
+                        Button {
+                            showQueue = true
+                        } label: {
+                            Label("Очередь (\(p.queue.count))", systemImage: "list.bullet")
+                                .font(.caption.bold())
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 14)
                 }
-                .foregroundStyle(.white)
-                .padding(.bottom, 12)
+                .frame(width: screen.size.width)
+                .offset(y: max(0, dragOffset))
+                .gesture(
+                    DragGesture()
+                        .onChanged { val in
+                            if val.translation.height > 0 {
+                                dragOffset = val.translation.height
+                            }
+                        }
+                        .onEnded { val in
+                            if val.translation.height > 110 {
+                                dismiss()
+                            } else {
+                                withAnimation(.spring()) { dragOffset = 0 }
+                            }
+                        }
+                )
             }
         }
         .sheet(isPresented: $showQueue) {
@@ -1545,6 +1669,51 @@ struct NowPlayingView: View {
     private func fmt(_ s: Double) -> String {
         let t = max(0, Int(s))
         return String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+struct WaveformScrubber: View {
+    let progress: Double
+    let seed: Int
+    var onCommit: (Double) -> Void
+    var onDrag: (Double) -> Void
+
+    private let barCount = 44
+
+    private func barHeight(index: Int) -> CGFloat {
+        let v = abs(sin(Double(index) * 0.55 + Double(seed % 17)) * cos(Double(index) * 0.23))
+        return CGFloat(10 + v * 26)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(alignment: .center, spacing: 3) {
+                ForEach(0..<barCount, id: \.self) { i in
+                    let barRatio = Double(i) / Double(barCount)
+                    let active = barRatio <= progress
+                    Capsule()
+                        .fill(
+                            active
+                                ? AnyShapeStyle(LinearGradient(colors: [.orange, .red], startPoint: .bottom, endPoint: .top))
+                                : AnyShapeStyle(Color.white.opacity(0.22))
+                        )
+                        .frame(height: barHeight(index: i))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { val in
+                        let r = min(max(val.location.x / max(geo.size.width, 1), 0), 1)
+                        onDrag(r)
+                    }
+                    .onEnded { val in
+                        let r = min(max(val.location.x / max(geo.size.width, 1), 0), 1)
+                        onCommit(r)
+                    }
+            )
+        }
     }
 }
 

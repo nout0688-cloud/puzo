@@ -18,6 +18,7 @@ struct Track: Identifiable, Codable, Equatable, Hashable {
     var genre: String?
     var streamUrl: String?
     var hlsUrl: String?
+    var trackAuth: String?
 }
 
 struct SCPlaylist: Identifiable, Codable, Equatable {
@@ -218,7 +219,8 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
 
     func apiGet(_ path: String, query: [URLQueryItem] = [], retry: Bool = true) async throws -> Any {
         var comps = URLComponents(string: path.hasPrefix("http") ? path : "https://api-v2.soundcloud.com\(path)")!
-        var items = query
+        var items = comps.queryItems ?? []
+        items.append(contentsOf: query)
         if !items.contains(where: { $0.name == "client_id" }) {
             items.append(URLQueryItem(name: "client_id", value: cachedClientId))
         }
@@ -262,6 +264,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
         let plays = dict["playback_count"] as? Int
         let likes = dict["likes_count"] as? Int
         let genre = dict["genre"] as? String
+        let trackAuth = dict["track_authorization"] as? String
 
         var progressive: String?
         var hls: String?
@@ -291,7 +294,8 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             likesCount: likes,
             genre: genre,
             streamUrl: progressive,
-            hlsUrl: hls
+            hlsUrl: hls,
+            trackAuth: trackAuth
         )
     }
 
@@ -722,20 +726,31 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
     }
 
     private func resolveStreamURL(for track: Track) async -> URL? {
-        var transcodingEndpoint = track.streamUrl ?? track.hlsUrl
-        if transcodingEndpoint == nil {
+        var candidates: [String] = []
+        if let p = track.streamUrl { candidates.append(p) }
+        if let h = track.hlsUrl { candidates.append(h) }
+        var auth = track.trackAuth
+
+        if candidates.isEmpty {
             if let json = try? await apiGet("/resolve", query: [URLQueryItem(name: "url", value: track.url)]),
                let dict = json as? [String: Any],
                let resolved = Self.parseTrack(dict) {
-                transcodingEndpoint = resolved.streamUrl ?? resolved.hlsUrl
+                if let p = resolved.streamUrl { candidates.append(p) }
+                if let h = resolved.hlsUrl { candidates.append(h) }
+                auth = resolved.trackAuth
             }
         }
-        guard let endpoint = transcodingEndpoint else { return nil }
-        if let json = try? await apiGet(endpoint),
-           let dict = json as? [String: Any],
-           let urlStr = dict["url"] as? String,
-           let u = URL(string: urlStr) {
-            return u
+        var extraQuery: [URLQueryItem] = []
+        if let auth, !auth.isEmpty {
+            extraQuery.append(URLQueryItem(name: "track_authorization", value: auth))
+        }
+        for endpoint in candidates {
+            if let json = try? await apiGet(endpoint, query: extraQuery),
+               let dict = json as? [String: Any],
+               let urlStr = dict["url"] as? String,
+               let u = URL(string: urlStr) {
+                return u
+            }
         }
         return nil
     }
@@ -790,13 +805,19 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
     }
 
     func seek(_ s: Double) {
-        position = s
+        let clamped = max(0, min(s, max(duration, 1)))
+        position = clamped
         if usingNativePlayer {
-            avPlayer.seek(to: CMTime(seconds: s, preferredTimescale: 600))
+            let target = CMTime(seconds: clamped, preferredTimescale: 600)
+            avPlayer.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
         } else {
-            js("w.seekTo(\(Int(s * 1000)))")
+            js("if(w) w.seekTo(\(Int(clamped * 1000)));")
         }
         updateNowPlaying()
+    }
+
+    func skip(by delta: Double) {
+        seek(position + delta)
     }
 
     func cycleRepeat() { repeatMode = RepeatMode(rawValue: (repeatMode.rawValue + 1) % 3)! }
@@ -833,7 +854,7 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
     // MARK: Native AVPlayer Observers
     private func setupNativePlayer() {
         timeObserver = avPlayer.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
             guard let self, self.usingNativePlayer else { return }
@@ -843,6 +864,8 @@ final class PlayerEngine: NSObject, ObservableObject, WKScriptMessageHandler {
             }
             if let dur = self.avPlayer.currentItem?.duration.seconds, dur.isFinite && dur > 0 {
                 self.duration = dur
+            } else if self.duration <= 0, let ms = self.current?.durationMs, ms > 0 {
+                self.duration = Double(ms) / 1000.0
             }
             self.updateNowPlaying()
         }
